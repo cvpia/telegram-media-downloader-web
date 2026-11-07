@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.0.4
+
+- 修复 Pyrogram 首条消息使用错误参考时钟导致的 `msg_id too low`。
+
 ## 3.0.3
 
 - 自动处理 Telegram `msg_id` 时钟同步错误并重试发送验证码。
