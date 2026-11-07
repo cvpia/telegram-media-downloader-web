@@ -189,6 +189,48 @@ class TelegramMediaDownloadRequest(BaseModel):
         return value.strip()
 
 
+class ForwardRuleCreateRequest(BaseModel):
+    source_chat: str = Field(min_length=1, max_length=512)
+    target_chat: str = Field(min_length=1, max_length=512)
+    filter_expression: str = Field(default="", max_length=4000)
+    enabled: bool = True
+    start_message_id: int | None = Field(default=None, ge=0)
+
+    @field_validator("source_chat", "target_chat")
+    @classmethod
+    def strip_chat_ref(cls, value: str):
+        return value.strip()
+
+    @field_validator("filter_expression")
+    @classmethod
+    def validate_expression(cls, value: str):
+        value = value.strip()
+        validate_download_filter(value)
+        return value
+
+
+class ForwardRuleUpdateRequest(BaseModel):
+    source_chat: str | None = Field(default=None, min_length=1, max_length=512)
+    target_chat: str | None = Field(default=None, min_length=1, max_length=512)
+    filter_expression: str | None = Field(default=None, max_length=4000)
+    enabled: bool | None = None
+    start_message_id: int | None = Field(default=None, ge=0)
+
+    @field_validator("source_chat", "target_chat")
+    @classmethod
+    def strip_optional_chat_ref(cls, value: str | None):
+        return value.strip() if value is not None else value
+
+    @field_validator("filter_expression")
+    @classmethod
+    def validate_optional_expression(cls, value: str | None):
+        if value is None:
+            return value
+        value = value.strip()
+        validate_download_filter(value)
+        return value
+
+
 class FilterValidateRequest(BaseModel):
     expression: str = Field(default="", max_length=4000)
 

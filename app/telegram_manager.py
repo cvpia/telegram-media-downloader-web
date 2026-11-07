@@ -97,16 +97,36 @@ class TelegramManager:
         self._client.get_file_semaphore = asyncio.Semaphore(limit)
 
 
-    def _new_client(self, name: str, api_id: int, api_hash: str) -> Client:
-        return Client(
-            name,
-            api_id=api_id,
-            api_hash=api_hash,
-            workdir=str(self.session_dir),
-            no_updates=True,
-            proxy=self.parse_proxy(self.settings.get_proxy_url()),
-            sleep_threshold=10,
-            max_concurrent_transmissions=self._download_concurrency(),
+    def _new_client(
+        self,
+        name: str,
+        api_id: int,
+        api_hash: str,
+        *,
+        bot_token: str | None = None,
+    ) -> Client:
+        options: dict[str, Any] = {
+            "api_id": api_id,
+            "api_hash": api_hash,
+            "workdir": str(self.session_dir),
+            "no_updates": not bool(bot_token),
+            "proxy": self.parse_proxy(self.settings.get_proxy_url()),
+            "sleep_threshold": 10,
+            "max_concurrent_transmissions": self._download_concurrency(),
+        }
+        if bot_token:
+            options["bot_token"] = bot_token
+        return Client(name, **options)
+
+    def create_bot_client(self, bot_token: str) -> Client:
+        api_id, api_hash = self.settings.get_loader_credentials()
+        if not api_id or not api_hash:
+            raise ValueError("Telegram API 凭据尚未配置")
+        return self._new_client(
+            "media_downloader_bot",
+            api_id,
+            api_hash,
+            bot_token=bot_token,
         )
 
     @staticmethod

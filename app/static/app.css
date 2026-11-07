@@ -390,6 +390,14 @@ code { padding: 2px 6px; border-radius: 6px; background: rgba(0, 0, 0, 0.05); co
 .row-actions { display: flex; gap: 12px; }
 .meta-row { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .7rem; }
 
+.forward-layout { margin-top: 18px; }
+.forward-enabled { align-self: end; }
+.forward-arrow { color: var(--primary); }
+.forward-error { margin: 9px 0 0; padding: 9px 11px; border-radius: 10px; background: var(--danger-soft); color: var(--danger); font-size: .7rem; }
+.command-list { display: grid; grid-template-columns: minmax(190px, auto) 1fr; gap: 8px 14px; align-items: center; color: var(--muted); font-size: .76rem; }
+.command-list code { width: fit-content; font-size: .7rem; }
+.forward-note { margin: 16px 0 0; }
+
 .toast { position: fixed; z-index: 100; right: 24px; bottom: 24px; max-width: min(420px, calc(100vw - 48px)); padding: 13px 16px; border: 1px solid var(--line); border-radius: 15px; background: rgba(255, 255, 255, .94); box-shadow: 0 16px 50px rgba(0, 0, 0, .14); color: var(--text); opacity: 0; pointer-events: none; transform: translateY(10px); transition: opacity .18s ease, transform .18s ease; backdrop-filter: blur(20px); }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast[data-type="success"] { border-color: rgba(36, 138, 61, .18); }
@@ -521,6 +529,8 @@ code { padding: 2px 6px; border-radius: 6px; background: rgba(0, 0, 0, 0.05); co
   .rule-dialog-heading { flex-direction: column; }
   .rule-dialog-actions { flex-direction: column-reverse; }
   .rule-dialog-actions .button { width: 100%; }
+  .command-list { grid-template-columns: 1fr; gap: 3px; }
+  .command-list span { margin-bottom: 7px; }
   .toast { right: 10px; bottom: 12px; max-width: calc(100vw - 20px); }
   input, select, textarea { min-height: 48px; font-size: 16px; }
 }

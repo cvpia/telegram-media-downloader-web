@@ -267,6 +267,7 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert 'id="sync-state"' in chats_page.text
     assert "tmd:dialogs:v2" in chats_page.text
     assert "localStorage" in chats_page.text
+    assert 'href="/forwarding"' in chats_page.text
     assert "下载监控" in settings_page.text
     assert "配置向导" in settings_page.text
     assert 'href="/setup?edit=1"' in settings_page.text
@@ -296,6 +297,14 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert "history-type-badge" in dashboard.text
     assert "${TMD.escape(item.media_type)}</span>" not in dashboard.text
     assert "displayFileName" in dashboard.text
+
+    forwarding = client.get("/forwarding")
+    assert forwarding.status_code == 200, forwarding.text
+    assert "消息转发" in forwarding.text
+    assert 'id="forward-form"' in forwarding.text
+    assert 'id="forward-rule-list"' in forwarding.text
+    assert "/listen_forward" in forwarding.text
+    assert "重启 Bot" in forwarding.text
 
     setup = client.get("/setup?edit=1")
     assert setup.status_code == 200, setup.text
@@ -616,3 +625,63 @@ def test_download_record_retry_returns_existing_record(client: TestClient):
     assert record is not None
     assert record["status"] == "downloading"
     assert record["error"] is None
+
+
+def test_forwarding_rule_api_and_page(client: TestClient, monkeypatch):
+    token = initialize_admin(client)
+    headers = {"X-CSRF-Token": token}
+    services = client.app.state.services
+
+    async def fake_create_rule(**kwargs):
+        return services.database.create_forward_rule(
+            source_chat="-100111",
+            source_title="Source",
+            target_chat="-100222",
+            target_title="Target",
+            filter_expression=kwargs["filter_expression"],
+            enabled=kwargs["enabled"],
+            last_message_id=50,
+        )
+
+    monkeypatch.setattr(services.bot, "create_rule", fake_create_rule)
+
+    response = client.post(
+        "/api/forward-rules",
+        json={
+            "source_chat": "@source",
+            "target_chat": "@target",
+            "filter_expression": "media_type == 'video'",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    rule = response.json()
+    assert rule["last_message_id"] == 50
+
+    listed = client.get("/api/forward-rules")
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [rule["id"]]
+
+    updated = client.patch(
+        f"/api/forward-rules/{rule['id']}",
+        json={"enabled": False},
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["enabled"] == 0
+
+    page = client.get("/forwarding")
+    assert page.status_code == 200
+    assert "Source" in page.text
+    assert "media_type" in page.text
+    assert "video" in page.text
+
+    status = client.get("/api/bot/status")
+    assert status.status_code == 200
+    assert status.json()["running"] is False
+
+    deleted = client.delete(
+        f"/api/forward-rules/{rule['id']}", headers=headers
+    )
+    assert deleted.status_code == 200
+    assert client.get("/api/forward-rules").json() == []

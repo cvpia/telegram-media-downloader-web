@@ -75,8 +75,27 @@ class Database:
             UNIQUE(chat_id, message_id)
         );
 
+        CREATE TABLE IF NOT EXISTS forward_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_chat TEXT NOT NULL,
+            source_title TEXT NOT NULL DEFAULT '',
+            target_chat TEXT NOT NULL,
+            target_title TEXT NOT NULL DEFAULT '',
+            filter_expression TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_message_id INTEGER NOT NULL DEFAULT 0,
+            forwarded_count INTEGER NOT NULL DEFAULT 0,
+            last_checked_at TEXT,
+            last_forwarded_at TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_downloads_started_at
             ON downloads(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_forward_rules_enabled
+            ON forward_rules(enabled);
         """
         with self._lock, self._connect() as connection:
             connection.executescript(schema)
@@ -251,6 +270,126 @@ class Database:
         with self._lock, self._connect() as connection:
             cursor = connection.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
         return cursor.rowcount > 0
+
+    def list_forward_rules(self, *, enabled_only: bool = False) -> list[dict[str, Any]]:
+        where = "WHERE enabled = 1" if enabled_only else ""
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM forward_rules {where} ORDER BY created_at ASC, id ASC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_forward_rule(self, rule_id: int) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM forward_rules WHERE id = ?", (rule_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def create_forward_rule(
+        self,
+        *,
+        source_chat: str,
+        source_title: str,
+        target_chat: str,
+        target_title: str,
+        filter_expression: str,
+        enabled: bool,
+        last_message_id: int,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO forward_rules(
+                    source_chat, source_title, target_chat, target_title,
+                    filter_expression, enabled, last_message_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_chat,
+                    source_title,
+                    target_chat,
+                    target_title,
+                    filter_expression,
+                    int(enabled),
+                    last_message_id,
+                    now,
+                    now,
+                ),
+            )
+            rule_id = int(cursor.lastrowid)
+        rule = self.get_forward_rule(rule_id)
+        if rule is None:
+            raise RuntimeError("Unable to create forward rule")
+        return rule
+
+    def update_forward_rule(self, rule_id: int, **updates: Any) -> dict[str, Any] | None:
+        allowed = {
+            "source_chat",
+            "source_title",
+            "target_chat",
+            "target_title",
+            "filter_expression",
+            "enabled",
+            "last_message_id",
+        }
+        fields: list[str] = []
+        values: list[Any] = []
+        for key, value in updates.items():
+            if key not in allowed or value is None:
+                continue
+            fields.append(f"{key} = ?")
+            values.append(int(value) if key in {"enabled", "last_message_id"} else value)
+        if not fields:
+            return self.get_forward_rule(rule_id)
+        fields.append("updated_at = ?")
+        values.extend((utc_now(), rule_id))
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                f"UPDATE forward_rules SET {', '.join(fields)} WHERE id = ?", values
+            )
+        return self.get_forward_rule(rule_id)
+
+    def delete_forward_rule(self, rule_id: int) -> bool:
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM forward_rules WHERE id = ?", (rule_id,)
+            )
+        return cursor.rowcount > 0
+
+    def record_forward_result(
+        self,
+        rule_id: int,
+        *,
+        last_message_id: int,
+        forwarded_count: int = 0,
+        error: str | None = None,
+    ) -> None:
+        now = utc_now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE forward_rules
+                SET last_message_id = MAX(last_message_id, ?),
+                    forwarded_count = forwarded_count + ?,
+                    last_checked_at = ?,
+                    last_forwarded_at = CASE WHEN ? > 0 THEN ? ELSE last_forwarded_at END,
+                    last_error = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    last_message_id,
+                    max(0, forwarded_count),
+                    now,
+                    forwarded_count,
+                    now,
+                    error,
+                    now,
+                    rule_id,
+                ),
+            )
 
     def create_download(
         self,

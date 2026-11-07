@@ -34,6 +34,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.bot_service import BotService
 from app.config import PROJECT_ROOT, RuntimeConfig
 from app.database import Database
 from app.downloader import DownloaderService
@@ -44,6 +45,8 @@ from app.schemas import (
     ChatBulkCreateRequest,
     ChatUpdateRequest,
     FilterValidateRequest,
+    ForwardRuleCreateRequest,
+    ForwardRuleUpdateRequest,
     LoginRequest,
     ProxySetupRequest,
     SettingsUpdate,
@@ -74,6 +77,7 @@ class Services:
     settings: SettingsService
     telegram: TelegramManager
     downloader: DownloaderService
+    bot: BotService
 
 
 def service_container(request: Request) -> Services:
@@ -154,12 +158,22 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         settings = SettingsService(database, cipher, runtime.download_dir)
         telegram = TelegramManager(settings, runtime.session_dir)
         downloader = DownloaderService(database, settings, telegram)
-        app.state.services = Services(database, settings, telegram, downloader)
+        bot = BotService(
+            database,
+            settings,
+            telegram,
+            downloader,
+            enabled=runtime.start_downloader,
+        )
+        app.state.services = Services(database, settings, telegram, downloader, bot)
         app.state.runtime = runtime
         logger.info("%s %s started", APP_NAME, APP_VERSION)
         try:
+            if runtime.start_downloader:
+                await bot.start()
             yield
         finally:
+            await bot.close()
             await downloader.close()
             await telegram.close()
 
@@ -300,6 +314,7 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         services = service_container(request)
         result = services.settings.update(payload)
         await services.downloader.refresh_concurrency_limit()
+        await services.bot.restart()
         return result
 
     @app.get("/api/settings/export.yaml", dependencies=[Depends(require_admin)])
@@ -353,9 +368,13 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         request: Request,
     ) -> dict[str, Any]:
         try:
-            return await service_container(request).telegram.submit_code(
+            services = service_container(request)
+            result = await services.telegram.submit_code(
                 payload.login_id, payload.code
             )
+            if services.settings.telegram_connected:
+                await services.bot.restart()
+            return result
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -368,9 +387,13 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         request: Request,
     ) -> dict[str, Any]:
         try:
-            return await service_container(request).telegram.submit_password(
+            services = service_container(request)
+            result = await services.telegram.submit_password(
                 payload.login_id, payload.password
             )
+            if services.settings.telegram_connected:
+                await services.bot.restart()
+            return result
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -517,8 +540,84 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         dependencies=[Depends(require_admin), Depends(csrf_header)],
     )
     async def telegram_logout(request: Request) -> dict[str, Any]:
-        await service_container(request).telegram.logout()
+        services = service_container(request)
+        await services.bot.stop()
+        await services.telegram.logout()
         return {"ok": True}
+
+    @app.get("/api/bot/status", dependencies=[Depends(require_admin)])
+    async def bot_status(request: Request) -> dict[str, Any]:
+        return service_container(request).bot.snapshot()
+
+    @app.post(
+        "/api/bot/restart",
+        dependencies=[Depends(require_admin), Depends(csrf_header)],
+    )
+    async def restart_bot(request: Request) -> dict[str, Any]:
+        return await service_container(request).bot.restart()
+
+    @app.get("/api/forward-rules", dependencies=[Depends(require_admin)])
+    async def list_forward_rules(request: Request) -> list[dict[str, Any]]:
+        return service_container(request).database.list_forward_rules()
+
+    @app.post(
+        "/api/forward-rules",
+        dependencies=[Depends(require_admin), Depends(csrf_header)],
+    )
+    async def create_forward_rule(
+        payload: ForwardRuleCreateRequest, request: Request
+    ) -> dict[str, Any]:
+        try:
+            return await service_container(request).bot.create_rule(**payload.model_dump())
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.patch(
+        "/api/forward-rules/{rule_id}",
+        dependencies=[Depends(require_admin), Depends(csrf_header)],
+    )
+    async def update_forward_rule(
+        rule_id: int, payload: ForwardRuleUpdateRequest, request: Request
+    ) -> dict[str, Any]:
+        try:
+            rule = await service_container(request).bot.update_rule(
+                rule_id, **payload.model_dump(exclude_unset=True)
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if rule is None:
+            raise HTTPException(status_code=404, detail="转发规则不存在")
+        return rule
+
+    @app.delete(
+        "/api/forward-rules/{rule_id}",
+        dependencies=[Depends(require_admin), Depends(csrf_header)],
+    )
+    async def delete_forward_rule(rule_id: int, request: Request) -> dict[str, Any]:
+        if not service_container(request).database.delete_forward_rule(rule_id):
+            raise HTTPException(status_code=404, detail="转发规则不存在")
+        return {"ok": True}
+
+    @app.post(
+        "/api/forward-rules/{rule_id}/check",
+        dependencies=[Depends(require_admin), Depends(csrf_header)],
+    )
+    async def check_forward_rule(rule_id: int, request: Request) -> dict[str, Any]:
+        try:
+            return await service_container(request).bot.check_rule(rule_id)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/forward-rules/check-all",
+        dependencies=[Depends(require_admin), Depends(csrf_header)],
+    )
+    async def check_all_forward_rules(request: Request) -> dict[str, Any]:
+        try:
+            results = await service_container(request).bot.check_all_rules()
+            return {"ok": True, "results": results}
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/chats", dependencies=[Depends(require_admin)])
     async def list_chats(request: Request) -> list[dict[str, Any]]:
@@ -780,6 +879,23 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
                 request,
                 page="chats",
                 chats=services.database.list_chats(),
+                telegram_connected=services.settings.telegram_connected,
+            ),
+        )
+
+    @app.get("/forwarding", response_class=HTMLResponse)
+    async def forwarding_page(request: Request):
+        services = service_container(request)
+        if not request.session.get("authenticated"):
+            return RedirectResponse("/login", status_code=303)
+        return templates.TemplateResponse(
+            request=request,
+            name="forwarding.html",
+            context=page_context(
+                request,
+                page="forwarding",
+                rules=services.database.list_forward_rules(),
+                bot_status=services.bot.snapshot(),
                 telegram_connected=services.settings.telegram_connected,
             ),
         )

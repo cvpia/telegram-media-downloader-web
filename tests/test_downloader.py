@@ -595,3 +595,40 @@ async def test_resume_incomplete_downloads_uses_saved_destination(
     assert calls[0] == ("get_messages", "@resume", 99)
     assert calls[1][0] == "download"
     assert calls[1][1]["destination_override"] == destination
+
+
+@pytest.mark.asyncio
+async def test_start_bot_download_uses_bot_client(tmp_path: Path, monkeypatch):
+    captured = {}
+    message = SimpleNamespace(
+        id=88,
+        date=datetime(2025, 1, 1, tzinfo=UTC),
+        chat=SimpleNamespace(id=123),
+        caption="",
+        text="",
+        audio=None,
+        document=None,
+        photo=None,
+        video=SimpleNamespace(file_name="bot-video.mp4", file_size=10),
+        voice=None,
+        video_note=None,
+        animation=None,
+    )
+    database = SimpleNamespace(
+        ensure_download_chat=lambda chat_ref, title: {"id": 5}
+    )
+    settings = SimpleNamespace(download_dir=lambda: tmp_path)
+    service = DownloaderService(database, settings, SimpleNamespace())
+
+    async def fake_run_direct_download(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(service, "_run_direct_download", fake_run_direct_download)
+    bot_client = SimpleNamespace(name="bot-client")
+
+    result = await service.start_bot_download(message, bot_client, "Bot 收件箱")
+    await asyncio.sleep(0)
+
+    assert result["status"] == "queued"
+    assert captured["client"] is bot_client
+    assert captured["message"] is message

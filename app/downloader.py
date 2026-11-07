@@ -458,6 +458,7 @@ class DownloaderService:
         chat_id: int,
         chat_title: str,
         destination: Path,
+        client: Any | None = None,
     ) -> None:
         try:
             await self._download_message(
@@ -468,12 +469,57 @@ class DownloaderService:
                 chat_id=chat_id,
                 chat_title=chat_title,
                 destination_override=destination,
+                client_override=client,
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.exception("Direct download failed")
             self.last_error = f"{chat_title} / {message.id}: {exc}"
+
+    async def start_bot_download(
+        self,
+        message: Any,
+        client: Any,
+        chat_title: str = "Bot 收件箱",
+    ) -> dict[str, Any]:
+        detected = detect_media(message)
+        if detected is None:
+            raise ValueError("消息不包含可下载媒体")
+        media_type, media = detected
+        file_name = getattr(media, "file_name", None)
+        hidden_chat = self.database.ensure_download_chat(
+            f"bot:{getattr(message.chat, 'id', 'inbox')}", chat_title
+        )
+        destination = build_group_destination(
+            self.settings.download_dir(),
+            chat_title,
+            media_type,
+            message,
+            file_name,
+        )
+        task = asyncio.create_task(
+            self._run_direct_download(
+                message=message,
+                media=media,
+                media_type=media_type,
+                file_name=file_name,
+                chat_id=int(hidden_chat["id"]),
+                chat_title=chat_title,
+                destination=destination,
+                client=client,
+            ),
+            name=f"telegram-bot-download-{getattr(message, 'id', 0)}",
+        )
+        self._direct_tasks.add(task)
+        task.add_done_callback(self._direct_tasks.discard)
+        return {
+            "ok": True,
+            "status": "queued",
+            "message_id": getattr(message, "id", 0),
+            "media_type": media_type,
+            "file_name": destination.name,
+        }
 
     async def _wait_if_paused(self) -> None:
         while self.state == "paused":
@@ -679,6 +725,7 @@ class DownloaderService:
         chat_id: int,
         chat_title: str,
         destination_override: Path | None = None,
+        client_override: Any | None = None,
     ) -> bool:
         async with self._download_slot():
             return await self._perform_download_message(
@@ -689,6 +736,7 @@ class DownloaderService:
                 chat_id=chat_id,
                 chat_title=chat_title,
                 destination_override=destination_override,
+                client_override=client_override,
             )
 
     async def _perform_download_message(
@@ -701,6 +749,7 @@ class DownloaderService:
         chat_id: int,
         chat_title: str,
         destination_override: Path | None = None,
+        client_override: Any | None = None,
     ) -> bool:
         destination = destination_override or build_destination(
             self.settings.download_dir(),
@@ -797,7 +846,7 @@ class DownloaderService:
             last_update = now
 
         try:
-            client = await self.telegram.get_client()
+            client = client_override or await self.telegram.get_client()
             file_id = getattr(media, "file_id", None)
             if not file_id:
                 raise RuntimeError("媒体文件标识缺失，无法下载")

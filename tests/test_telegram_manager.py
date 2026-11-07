@@ -52,6 +52,25 @@ def test_new_client_uses_configured_max_concurrent_transmissions(monkeypatch):
     assert client.kwargs["max_concurrent_transmissions"] == 10
 
 
+def test_bot_client_enables_updates_and_uses_bot_token(monkeypatch):
+    class CapturingClient:
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+    settings = SimpleNamespace(
+        max_concurrent_downloads=lambda: 5,
+        get_proxy_url=lambda: "",
+        get_loader_credentials=lambda: (123, "hash"),
+    )
+    manager = TelegramManager(settings=settings, session_dir=Path("."))
+    monkeypatch.setattr("app.telegram_manager.Client", CapturingClient)
+
+    client = manager.create_bot_client("123:token")
+
+    assert client.kwargs["bot_token"] == "123:token"
+    assert client.kwargs["no_updates"] is False
+
+
 def test_set_max_concurrent_transmissions_updates_live_client():
     settings = SimpleNamespace(max_concurrent_downloads=lambda: 10)
     manager = TelegramManager(settings=settings, session_dir=Path("."))

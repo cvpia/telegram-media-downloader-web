@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}消息转发 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-heading">
+  <div><div class="eyebrow">MESSAGE FORWARDING</div><h1>消息转发</h1><p class="muted">监听源会话的新消息，自动转发到目标会话；也可通过 Telegram Bot 管理任务。</p></div>
+  <div class="button-row"><button class="button button-ghost" id="restart-bot" type="button">重启 Bot</button><button class="button button-primary" id="check-all-rules" type="button">立即检查全部</button></div>
+</section>
+
+<section class="two-column-layout settings-layout">
+  <article class="panel">
+    <div class="panel-heading"><div><h2>Bot 状态</h2><p class="muted">Telegram 命令入口与监听服务</p></div><span class="tag" id="bot-status-tag">检查中</span></div>
+    <div class="system-row"><span>Bot Token</span><strong id="bot-configured">—</strong></div>
+    <div class="system-row"><span>运行状态</span><strong id="bot-running">—</strong></div>
+    <div class="system-row"><span>Bot 用户名</span><strong id="bot-username">—</strong></div>
+    <div class="system-row"><span>监听间隔</span><strong id="bot-interval">—</strong></div>
+    <p class="form-error" id="bot-error" hidden></p>
+  </article>
+  <article class="panel">
+    <div class="panel-heading"><div><h2>Telegram 命令</h2><p class="muted">仅登录的 Telegram 账号可使用</p></div></div>
+    <div class="command-list">
+      <code>/start</code><span>显示机器人使用说明</span>
+      <code>/download 源 开始ID 结束ID</code><span>批量下载指定范围</span>
+      <code>/forward 源 目标 开始ID 结束ID</code><span>立即转发指定范围</span>
+      <code>/listen_forward 源 目标 [筛选]</code><span>监听并自动转发新消息</span>
+      <code>/stop_listen 规则ID</code><span>停用监听规则</span>
+    </div>
+    <div class="notice notice-info forward-note">直接把媒体消息发给 Bot，会保存到服务器下载目录。</div>
+  </article>
+</section>
+
+<section class="two-column-layout forward-layout">
+  <article class="panel">
+    <div class="panel-heading"><div><h2 id="forward-form-title">添加监听规则</h2><p class="muted">空筛选表示转发所有新消息</p></div><button class="link-button" id="reset-forward-form" type="button">重置</button></div>
+    <form class="stack-form" id="forward-form">
+      <div class="form-grid">
+        <label><span>源会话</span><input id="forward-source" type="text" list="forward-source-options" placeholder="@source 或 -100..." required></label>
+        <label><span>目标会话</span><input id="forward-target" type="text" list="forward-target-options" placeholder="@target 或 -100..." required></label>
+      </div>
+      <datalist id="forward-source-options"></datalist>
+      <datalist id="forward-target-options"></datalist>
+      <label><span>筛选表达式（可选）</span><textarea id="forward-filter" rows="4" placeholder="例如：media_type == 'video' and file_size > 100MB"></textarea><small>支持与频道下载规则相同的字段和语法。</small></label>
+      <div class="form-grid">
+        <label><span>起始消息 ID（可选）</span><input id="forward-start-id" type="number" min="0" step="1" placeholder="留空从当前最新消息之后开始"></label>
+        <label class="check-item forward-enabled"><input id="forward-enabled" type="checkbox" checked><span>创建后立即启用监听</span></label>
+      </div>
+      <p class="form-error" id="forward-form-error" hidden></p>
+      <div class="button-row"><button class="button button-primary" id="forward-submit" type="submit">添加监听规则</button></div>
+    </form>
+  </article>
+
+  <article class="panel">
+    <div class="panel-heading"><div><h2>监听规则</h2><p class="muted">定时检查源会话并转发新消息</p></div><span class="tag" id="forward-rule-count">0 条</span></div>
+    <div id="forward-rule-list" class="task-list"><p class="empty-state">尚未配置监听规则</p></div>
+  </article>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const initialRules = {{ rules | tojson }};
+const initialBotStatus = {{ bot_status | tojson }};
+let forwardRules = [...initialRules];
+let botStatus = initialBotStatus;
+let editingRuleId = null;
+
+function formatTime(value) {
+  if (!value) return '尚未执行';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function renderBotStatus() {
+  const tag = document.getElementById('bot-status-tag');
+  tag.textContent = botStatus.running ? '运行中' : (botStatus.configured ? '未运行' : '未配置');
+  tag.className = `tag ${botStatus.running ? 'tag-success' : 'tag-warning'}`;
+  document.getElementById('bot-configured').textContent = botStatus.configured ? '已配置' : '未配置';
+  document.getElementById('bot-running').textContent = botStatus.running ? '在线' : '离线';
+  document.getElementById('bot-username').textContent = botStatus.username ? `@${botStatus.username}` : '—';
+  document.getElementById('bot-interval').textContent = `每 ${botStatus.monitor_interval} 秒`;
+  const error = document.getElementById('bot-error');
+  error.hidden = !botStatus.error;
+  error.textContent = botStatus.error || '';
+}
+
+function renderRules() {
+  const list = document.getElementById('forward-rule-list');
+  document.getElementById('forward-rule-count').textContent = `${forwardRules.length} 条`;
+  if (!forwardRules.length) {
+    list.innerHTML = '<p class="empty-state">尚未配置监听规则</p>';
+    return;
+  }
+  list.innerHTML = forwardRules.map((rule) => `<div class="task-row task-row-stack forward-rule" data-rule-id="${rule.id}">
+    <div class="task-line">
+      <div><strong>${TMD.escape(rule.source_title || rule.source_chat)} <span class="forward-arrow">→</span> ${TMD.escape(rule.target_title || rule.target_chat)}</strong><small>${TMD.escape(rule.source_chat)} → ${TMD.escape(rule.target_chat)}</small></div>
+      <div class="row-actions"><button class="link-button" data-check="${rule.id}">立即检查</button><button class="link-button" data-edit="${rule.id}">编辑</button><button class="link-button" data-toggle="${rule.id}">${rule.enabled ? '停用' : '启用'}</button><button class="link-button danger-text" data-delete="${rule.id}">删除</button></div>
+    </div>
+    <div class="meta-row">
+      <span class="tag ${rule.enabled ? 'tag-success' : ''}">${rule.enabled ? '监听中' : '已停用'}</span>
+      <span>已转发 ${rule.forwarded_count || 0} 条</span>
+      <span>检查点 #${rule.last_message_id || 0}</span>
+      <span>上次检查：${TMD.escape(formatTime(rule.last_checked_at))}</span>
+    </div>
+    ${rule.filter_expression ? `<p class="rule-summary">${TMD.escape(rule.filter_expression)}</p>` : ''}
+    ${rule.last_error ? `<p class="forward-error">${TMD.escape(rule.last_error)}</p>` : ''}
+  </div>`).join('');
+}
+
+async function refreshRules() {
+  forwardRules = await TMD.api('/api/forward-rules');
+  renderRules();
+}
+
+async function refreshBotStatus() {
+  botStatus = await TMD.api('/api/bot/status');
+  renderBotStatus();
+}
+
+function resetForwardForm() {
+  editingRuleId = null;
+  document.getElementById('forward-form').reset();
+  document.getElementById('forward-enabled').checked = true;
+  document.getElementById('forward-form-title').textContent = '添加监听规则';
+  document.getElementById('forward-submit').textContent = '添加监听规则';
+  document.getElementById('forward-form-error').hidden = true;
+}
+
+function editRule(ruleId) {
+  const rule = forwardRules.find((item) => Number(item.id) === Number(ruleId));
+  if (!rule) return;
+  editingRuleId = Number(rule.id);
+  document.getElementById('forward-source').value = rule.source_chat;
+  document.getElementById('forward-target').value = rule.target_chat;
+  document.getElementById('forward-filter').value = rule.filter_expression || '';
+  document.getElementById('forward-start-id').value = '';
+  document.getElementById('forward-enabled').checked = Boolean(rule.enabled);
+  document.getElementById('forward-form-title').textContent = `编辑监听规则 #${rule.id}`;
+  document.getElementById('forward-submit').textContent = '保存规则';
+  document.getElementById('forward-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+document.getElementById('forward-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const error = document.getElementById('forward-form-error');
+  error.hidden = true;
+  const startId = document.getElementById('forward-start-id').value;
+  const body = {
+    source_chat: document.getElementById('forward-source').value.trim(),
+    target_chat: document.getElementById('forward-target').value.trim(),
+    filter_expression: document.getElementById('forward-filter').value.trim(),
+    enabled: document.getElementById('forward-enabled').checked,
+    start_message_id: startId ? Number(startId) : null,
+  };
+  try {
+    if (editingRuleId) await TMD.api(`/api/forward-rules/${editingRuleId}`, { method: 'PATCH', body });
+    else await TMD.api('/api/forward-rules', { method: 'POST', body });
+    TMD.toast(editingRuleId ? '监听规则已保存' : '监听规则已创建', 'success');
+    resetForwardForm();
+    await refreshRules();
+  } catch (err) {
+    error.textContent = err.message;
+    error.hidden = false;
+  }
+});
+
+document.getElementById('forward-rule-list').addEventListener('click', async (event) => {
+  const check = event.target.closest('[data-check]');
+  const edit = event.target.closest('[data-edit]');
+  const toggle = event.target.closest('[data-toggle]');
+  const remove = event.target.closest('[data-delete]');
+  try {
+    if (check) {
+      const result = await TMD.api(`/api/forward-rules/${check.dataset.check}/check`, { method: 'POST', timeoutMs: 60000 });
+      TMD.toast(`检查 ${result.checked} 条，转发 ${result.forwarded} 条`, 'success');
+      await refreshRules();
+    } else if (edit) {
+      editRule(edit.dataset.edit);
+    } else if (toggle) {
+      const rule = forwardRules.find((item) => Number(item.id) === Number(toggle.dataset.toggle));
+      await TMD.api(`/api/forward-rules/${toggle.dataset.toggle}`, { method: 'PATCH', body: { enabled: !rule.enabled } });
+      await refreshRules();
+    } else if (remove) {
+      if (!confirm('确定删除这条监听转发规则吗？')) return;
+      await TMD.api(`/api/forward-rules/${remove.dataset.delete}`, { method: 'DELETE' });
+      TMD.toast('监听规则已删除', 'success');
+      await refreshRules();
+    }
+  } catch (err) { TMD.toast(err.message, 'error'); }
+});
+
+document.getElementById('reset-forward-form').addEventListener('click', resetForwardForm);
+document.getElementById('restart-bot').addEventListener('click', async () => {
+  try {
+    botStatus = await TMD.api('/api/bot/restart', { method: 'POST', timeoutMs: 30000 });
+    renderBotStatus();
+    TMD.toast(botStatus.running ? 'Bot 已重启' : (botStatus.error || 'Bot 未运行'), botStatus.running ? 'success' : 'error');
+  } catch (err) { TMD.toast(err.message, 'error'); }
+});
+document.getElementById('check-all-rules').addEventListener('click', async () => {
+  try {
+    const result = await TMD.api('/api/forward-rules/check-all', { method: 'POST', timeoutMs: 60000 });
+    const forwarded = result.results.reduce((sum, item) => sum + item.forwarded, 0);
+    TMD.toast(`检查完成，共转发 ${forwarded} 条`, 'success');
+    await refreshRules();
+  } catch (err) { TMD.toast(err.message, 'error'); }
+});
+
+async function loadDialogs() {
+  if (!{{ 'true' if telegram_connected else 'false' }}) return;
+  try {
+    const dialogs = await TMD.api('/api/telegram/dialogs', { timeoutMs: 30000 });
+    const options = dialogs.map((dialog) => `<option value="${TMD.escape(dialog.id)}">${TMD.escape(dialog.title || dialog.id)}</option>`).join('');
+    document.getElementById('forward-source-options').innerHTML = options;
+    document.getElementById('forward-target-options').innerHTML = options;
+  } catch (_) {}
+}
+
+renderBotStatus();
+renderRules();
+loadDialogs();
+setInterval(() => {
+  refreshBotStatus().catch(() => {});
+  refreshRules().catch(() => {});
+}, 10000);
+</script>
+{% endblock %}
