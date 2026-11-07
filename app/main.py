@@ -197,9 +197,9 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         request: Request,
     ) -> dict[str, Any]:
         services = service_container(request)
-        if services.settings.admin_configured:
-            raise HTTPException(status_code=409, detail="管理员已经初始化，请到系统设置中修改代理")
-        proxy_url = payload.proxy_url.strip()
+        if services.settings.admin_configured and not request.session.get("authenticated"):
+            raise HTTPException(status_code=401, detail="请先登录管理后台")
+        proxy_url = (payload.proxy_url if payload.proxy_url is not None else services.settings.get_proxy_url()).strip()
         if proxy_url:
             try:
                 TelegramManager.parse_proxy(proxy_url)

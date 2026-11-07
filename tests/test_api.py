@@ -30,6 +30,7 @@ def test_setup_page_renders_version_and_csrf(client: TestClient):
     assert '测试代理并继续' in response.text
     assert 'id="api-hash"' in response.text
     assert 'id="bot-token"' in response.text
+    assert 'test-saved-network' in response.text
 
 
 def test_csrf_is_required(client: TestClient):
@@ -271,3 +272,23 @@ def test_network_probe_failure_does_not_advance_setup(client: TestClient, monkey
     )
     assert response.status_code == 422
     assert client.get("/api/setup/status").json()["proxy_step_completed"] is False
+def test_authenticated_user_can_retest_saved_proxy(client: TestClient, monkeypatch):
+    token = initialize_admin(client)
+    client.put(
+        "/api/settings",
+        json={"proxy_url": "socks5://127.0.0.1:1080"},
+        headers={"X-CSRF-Token": token},
+    )
+
+    async def fake_probe(proxy_url, target_url):
+        assert proxy_url == "socks5://127.0.0.1:1080"
+        return {"ok": True, "latency_ms": 45, "status_code": 200, "mode": "proxy"}
+
+    monkeypatch.setattr("app.main.test_network_connection", fake_probe)
+    response = client.post(
+        "/api/setup/proxy/test",
+        json={"proxy_url": None},
+        headers={"X-CSRF-Token": token},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["latency_ms"] == 45

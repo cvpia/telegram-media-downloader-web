@@ -15,7 +15,7 @@ YEAR_MONTH_RE = r"^\d{4}-\d{2}$"
 
 
 class ProxySetupRequest(BaseModel):
-    proxy_url: str = Field(default="", max_length=1024)
+    proxy_url: str | None = Field(default=None, max_length=1024)
 
 class AdminSetupRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)

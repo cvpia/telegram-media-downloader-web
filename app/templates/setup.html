@@ -62,6 +62,10 @@
         <div class="button-row"><button class="button button-ghost" type="button" id="phone-back">上一步</button><button class="button button-primary" type="submit">发送验证码</button></div>
         <p class="form-error" data-error hidden></p>
       </form>
+      <div class="network-check">
+        <button class="button button-ghost" id="test-saved-network" type="button">测试已保存的网络连接</button>
+        <p class="form-status" id="saved-network-status" hidden></p>
+      </div>
       <form id="code-form" class="stack-form narrow-form" hidden>
         <label><span>Telegram 验证码</span><input id="login-code" type="text" inputmode="numeric" autocomplete="one-time-code" required></label>
         <div class="button-row"><button class="button button-ghost" type="button" id="code-back">更换手机号</button><button class="button button-primary" type="submit">验证并继续</button></div>
@@ -322,6 +326,27 @@ document.getElementById('password-form').addEventListener('submit', async (event
   }
 });
 document.getElementById('phone-back').addEventListener('click', () => showStep(3));
+document.getElementById('test-saved-network').addEventListener('click', async () => {
+  const button = document.getElementById('test-saved-network');
+  const status = document.getElementById('saved-network-status');
+  button.disabled = true;
+  status.hidden = false;
+  status.dataset.state = 'loading';
+  status.textContent = '正在测试已保存的网络…';
+  try {
+    const result = await TMD.api('/api/setup/proxy/test', { method: 'POST', body: { proxy_url: null } });
+    status.dataset.state = 'success';
+    status.textContent = `网络连接正常，耗时 ${result.latency_ms} ms`;
+    TMD.toast('网络连接测试通过', 'success');
+  } catch (err) {
+    status.dataset.state = 'error';
+    status.textContent = err.message;
+    TMD.toast(err.message, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
 
 async function loadSettings() {
   const settings = await TMD.api('/api/settings');
