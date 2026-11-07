@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator, Callable
 from urllib.parse import unquote, urlparse
 
 from pyrogram import Client, raw, utils
@@ -28,6 +28,7 @@ from app.settings_service import SettingsService
 
 
 logger = logging.getLogger(__name__)
+TELEGRAM_STREAM_CHUNK_SIZE = 1024 * 1024
 
 
 @dataclass
@@ -646,6 +647,68 @@ class TelegramManager:
                     raise RuntimeError("Telegram 缩略图缓存下载失败")
                 temporary.replace(target)
         return target, "image/jpeg"
+
+    async def get_message_media_stream(
+        self, dialog_id: str, message_id: int
+    ) -> tuple[Callable[[int, int], AsyncIterator[bytes]], str, int]:
+        client = await self.get_client()
+        message = await self._get_message_object(client, dialog_id, message_id)
+        media_type, media = self._message_media(message)
+        if media is None:
+            raise ValueError("该消息不包含可播放媒体")
+
+        total_size = int(getattr(media, "file_size", 0) or 0)
+        if total_size <= 0:
+            raise ValueError("无法读取媒体文件大小")
+
+        file_name = str(getattr(media, "file_name", "") or "")
+        mime_type = (
+            str(getattr(media, "mime_type", "") or "")
+            or mimetypes.guess_type(file_name)[0]
+            or {
+                "photo": "image/jpeg",
+                "video": "video/mp4",
+                "video_note": "video/mp4",
+                "animation": "video/mp4",
+                "audio": "audio/mpeg",
+                "voice": "audio/ogg",
+            }.get(media_type)
+            or "application/octet-stream"
+        )
+
+        def stream_range(start: int, end: int) -> AsyncIterator[bytes]:
+            start = max(0, int(start))
+            end = min(int(end), total_size - 1)
+            if start > end or start >= total_size:
+                raise ValueError("请求范围超出媒体大小")
+
+            chunk_offset = start // TELEGRAM_STREAM_CHUNK_SIZE
+            last_chunk = (end + TELEGRAM_STREAM_CHUNK_SIZE) // TELEGRAM_STREAM_CHUNK_SIZE
+            chunk_limit = max(1, last_chunk - chunk_offset)
+
+            async def chunks() -> AsyncIterator[bytes]:
+                remaining = end - start + 1
+                skip = start % TELEGRAM_STREAM_CHUNK_SIZE
+                first = True
+                async for chunk in client.stream_media(
+                    message, offset=chunk_offset, limit=chunk_limit
+                ):
+                    data = bytes(chunk)
+                    if first:
+                        data = data[skip:]
+                        first = False
+                    if not data:
+                        continue
+                    if len(data) > remaining:
+                        data = data[:remaining]
+                    remaining -= len(data)
+                    yield data
+                    if remaining <= 0:
+                        break
+
+            return chunks()
+
+        return stream_range, mime_type, total_size
 
     async def get_message_media_file(
         self, dialog_id: str, message_id: int

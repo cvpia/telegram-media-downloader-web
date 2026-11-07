@@ -80,6 +80,33 @@ def service_container(request: Request) -> Services:
     return request.app.state.services
 
 
+def parse_http_byte_range(range_header: str | None, total_size: int) -> tuple[int, int, bool]:
+    if total_size <= 0:
+        raise ValueError("媒体文件大小无效")
+    if not range_header:
+        return 0, total_size - 1, False
+    if not range_header.startswith("bytes=") or "," in range_header:
+        raise ValueError("仅支持单段字节范围请求")
+
+    value = range_header[6:].strip()
+    if "-" not in value:
+        raise ValueError("字节范围格式无效")
+    start_text, end_text = value.split("-", 1)
+    if not start_text:
+        suffix_length = int(end_text or "0")
+        if suffix_length <= 0:
+            raise ValueError("字节范围格式无效")
+        start = max(0, total_size - suffix_length)
+        end = total_size - 1
+    else:
+        start = int(start_text)
+        end = int(end_text) if end_text else total_size - 1
+        end = min(end, total_size - 1)
+    if start < 0 or start >= total_size or start > end:
+        raise ValueError("字节范围超出媒体大小")
+    return start, end, True
+
+
 def csrf_header(
     request: Request,
     x_csrf_token: Annotated[str | None, Header()] = None,
@@ -415,23 +442,52 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             headers={"Cache-Control": "private, max-age=86400"},
         )
 
-    @app.get(
+    @app.api_route(
         "/api/telegram/dialogs/{dialog_id}/messages/{message_id}/media",
+        methods=["GET", "HEAD"],
         dependencies=[Depends(require_admin)],
     )
     async def telegram_message_media(
         dialog_id: str, message_id: int, request: Request
-    ) -> FileResponse:
+    ) -> Response:
         try:
-            path, media_type = await service_container(request).telegram.get_message_media_file(
-                dialog_id, message_id
-            )
+            stream_factory, media_type, total_size = await service_container(
+                request
+            ).telegram.get_message_media_stream(dialog_id, message_id)
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return FileResponse(
-            path,
+
+        try:
+            start, end, partial = parse_http_byte_range(
+                request.headers.get("range"), total_size
+            )
+        except (TypeError, ValueError):
+            return Response(
+                status_code=416,
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Range": f"bytes */{total_size}",
+                },
+            )
+
+        length = end - start + 1
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": "inline",
+            "Content-Length": str(length),
+            "Cache-Control": "private, max-age=3600",
+            "X-Accel-Buffering": "no",
+        }
+        if partial:
+            headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
+        status_code = 206 if partial else 200
+        if request.method == "HEAD":
+            return Response(status_code=status_code, media_type=media_type, headers=headers)
+        return StreamingResponse(
+            stream_factory(start, end),
+            status_code=status_code,
             media_type=media_type,
-            headers={"Cache-Control": "private, max-age=3600"},
+            headers=headers,
         )
 
     @app.post(

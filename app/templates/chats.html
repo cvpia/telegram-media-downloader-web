@@ -155,6 +155,16 @@
   </form>
 </dialog>
 
+<dialog class="video-dialog" id="video-dialog">
+  <div class="video-dialog-shell">
+    <header class="video-dialog-heading">
+      <div><strong id="video-dialog-title">视频播放</strong><small>在线播放 · 支持拖动进度</small></div>
+      <button class="icon-button" id="close-video-dialog" type="button" title="关闭视频播放">×</button>
+    </header>
+    <video id="video-player" controls autoplay playsinline preload="metadata"></video>
+  </div>
+</dialog>
+
 {% endblock %}
 {% block scripts %}
 <script>
@@ -430,6 +440,33 @@ function formatMessageDate(value) {
   });
 }
 
+function resetVideoPlayer() {
+  const player = document.getElementById('video-player');
+  player.pause();
+  player.removeAttribute('src');
+  player.load();
+}
+
+function openVideoPlayer(url, title) {
+  if (!url) return;
+  const dialog = document.getElementById('video-dialog');
+  const player = document.getElementById('video-player');
+  document.getElementById('video-dialog-title').textContent = title || '视频播放';
+  player.src = url;
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else dialog.setAttribute('open', '');
+  player.play().catch(() => {});
+}
+
+function closeVideoPlayer() {
+  const dialog = document.getElementById('video-dialog');
+  if (dialog.open && typeof dialog.close === 'function') dialog.close();
+  else {
+    dialog.removeAttribute('open');
+    resetVideoPlayer();
+  }
+}
+
 function readMessageCache(dialogId) {
   const cached = messageCache.get(String(dialogId));
   if (!cached || !Array.isArray(cached.messages) || !cached.messages.length) return null;
@@ -490,7 +527,10 @@ function renderMessages(messages, { scrollToBottom = true, preserve = null } = {
       const fullMedia = `/api/telegram/dialogs/${encodeURIComponent(dialogId)}/messages/${message.id}/media`;
       const label = TMD.escape(message.media_name || (message.media_type === 'photo' ? '图片' : '视频'));
       const actionLabel = message.media_type === 'video' ? '播放视频' : '查看原图';
-      preview = `<a class="message-media-preview message-media-play" href="${fullMedia}" target="_blank" rel="noopener" aria-label="${actionLabel}：${label}"><img src="${source}" alt="${label}" loading="lazy" decoding="async" onerror="this.hidden=true"><span class="message-media-open">${actionLabel}</span></a>`;
+      const previewMedia = `<img src="${source}" alt="${label}" loading="lazy" decoding="async" onerror="this.hidden=true"><span class="message-media-open">${actionLabel}</span>`;
+      preview = message.media_type === 'video'
+        ? `<button class="message-media-preview message-media-play" type="button" data-play-video data-media-url="${fullMedia}" data-media-title="${label}" aria-label="${actionLabel}：${label}">${previewMedia}</button>`
+        : `<a class="message-media-preview message-media-play" href="${fullMedia}" target="_blank" rel="noopener" aria-label="${actionLabel}：${label}">${previewMedia}</a>`;
     }
     const saveButton = message.has_media
       ? `<button class="message-save-button" type="button" data-save-message="${message.id}" data-media-type="${TMD.escape(message.media_type)}">保存到 downloads/群名</button>`
@@ -718,6 +758,11 @@ document.getElementById('dialog-messages').addEventListener('scroll', (event) =>
 });
 document.getElementById('close-dialog-preview').addEventListener('click', closeDialogPreview);
 document.getElementById('dialog-messages').addEventListener('click', async (event) => {
+  const videoPreview = event.target.closest('[data-play-video]');
+  if (videoPreview) {
+    openVideoPlayer(videoPreview.dataset.mediaUrl, videoPreview.dataset.mediaTitle);
+    return;
+  }
   const retryMessages = event.target.closest('[data-retry-messages]');
   if (retryMessages && activeDialog) {
     await loadDialogMessages(activeDialog);
@@ -821,6 +866,11 @@ document.getElementById('close-rule-dialog').addEventListener('click', () => {
 document.getElementById('rule-dialog').addEventListener('click', (event) => {
   if (event.target === event.currentTarget) event.currentTarget.close();
 });
+document.getElementById('close-video-dialog').addEventListener('click', closeVideoPlayer);
+document.getElementById('video-dialog').addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) closeVideoPlayer();
+});
+document.getElementById('video-dialog').addEventListener('close', resetVideoPlayer);
 document.getElementById('rule-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const dialog = document.getElementById('rule-dialog');

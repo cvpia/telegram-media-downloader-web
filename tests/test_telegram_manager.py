@@ -9,7 +9,7 @@ import pytest
 from pyrogram.errors import BadMsgNotification
 from pyrogram import raw
 
-from app.telegram_manager import TelegramManager
+from app.telegram_manager import TELEGRAM_STREAM_CHUNK_SIZE, TelegramManager
 
 
 class FakeClient:
@@ -399,6 +399,51 @@ async def test_get_message_media_file_caches_video(tmp_path, monkeypatch):
     assert path.read_bytes() == b"video-data"
     assert path.suffix == ".mp4"
     assert media_type == "video/mp4"
+
+
+@pytest.mark.asyncio
+async def test_get_message_media_stream_slices_requested_range(tmp_path, monkeypatch):
+    manager = TelegramManager(settings=None, session_dir=tmp_path)
+    total_size = TELEGRAM_STREAM_CHUNK_SIZE * 2 + 10
+    media = SimpleNamespace(
+        file_name="clip.mp4",
+        mime_type="video/mp4",
+        file_size=total_size,
+    )
+    message = SimpleNamespace(
+        id=31,
+        photo=None,
+        video=media,
+        audio=None,
+        document=None,
+        voice=None,
+        video_note=None,
+        animation=None,
+    )
+    manager._message_objects[("-100123", 31)] = message
+
+    class FakeClient:
+        async def stream_media(self, message_arg, offset, limit):
+            assert message_arg is message
+            assert offset == 1
+            assert limit == 1
+            yield b"a" * TELEGRAM_STREAM_CHUNK_SIZE
+            yield b"b" * TELEGRAM_STREAM_CHUNK_SIZE
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(manager, "get_client", fake_get_client)
+    stream_range, media_type, size = await manager.get_message_media_stream(
+        "-100123", 31
+    )
+    start = TELEGRAM_STREAM_CHUNK_SIZE + 5
+    end = TELEGRAM_STREAM_CHUNK_SIZE + 20
+    chunks = [chunk async for chunk in stream_range(start, end)]
+
+    assert b"".join(chunks) == b"a" * (end - start + 1)
+    assert media_type == "video/mp4"
+    assert size == total_size
 
 
 @pytest.mark.asyncio

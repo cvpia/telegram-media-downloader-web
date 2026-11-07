@@ -243,7 +243,9 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert "timeoutMs: 30000" in chats_page.text
     assert "timeoutMs: 15000" in chats_page.text
     assert "message-media-preview message-media-play" in chats_page.text
-    assert 'target="_blank" rel="noopener" aria-label="${actionLabel}' in chats_page.text
+    assert 'data-play-video data-media-url="${fullMedia}"' in chats_page.text
+    assert 'id="video-dialog"' in chats_page.text
+    assert 'id="video-player"' in chats_page.text
     assert 'id="sync-state"' in chats_page.text
     assert "tmd:dialogs:v2" in chats_page.text
     assert "localStorage" in chats_page.text
@@ -463,10 +465,19 @@ def test_media_preview_direct_download_and_history_api(
     preview_file = tmp_path / "preview.jpg"
     preview_file.write_bytes(b"preview-image")
 
-    async def fake_preview(dialog_id, message_id):
+    streaming_video = b"streaming-video-content"
+
+    async def fake_stream(dialog_id, message_id):
         assert dialog_id == "-100123"
         assert message_id == 9
-        return preview_file, "image/jpeg"
+
+        def stream_range(start, end):
+            async def chunks():
+                yield streaming_video[start : end + 1]
+
+            return chunks()
+
+        return stream_range, "video/mp4", len(streaming_video)
 
     async def fake_thumbnail(dialog_id, message_id):
         assert dialog_id == "-100123"
@@ -485,7 +496,7 @@ def test_media_preview_direct_download_and_history_api(
             "relative_path": "Media Demo/image.jpg",
         }
 
-    monkeypatch.setattr(services.telegram, "get_message_media_file", fake_preview)
+    monkeypatch.setattr(services.telegram, "get_message_media_stream", fake_stream)
     monkeypatch.setattr(
         services.telegram, "get_message_thumbnail_file", fake_thumbnail
     )
@@ -503,8 +514,19 @@ def test_media_preview_direct_download_and_history_api(
         "/api/telegram/dialogs/-100123/messages/9/media"
     )
     assert response.status_code == 200
-    assert response.content == b"preview-image"
-    assert response.headers["content-type"].startswith("image/jpeg")
+    assert response.content == streaming_video
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-length"] == str(len(streaming_video))
+
+    response = client.get(
+        "/api/telegram/dialogs/-100123/messages/9/media",
+        headers={"Range": "bytes=2-7"},
+    )
+    assert response.status_code == 206
+    assert response.content == streaming_video[2:8]
+    assert response.headers["content-range"] == f"bytes 2-7/{len(streaming_video)}"
+    assert response.headers["content-length"] == "6"
 
     response = client.post(
         "/api/telegram/dialogs/-100123/messages/9/download",
