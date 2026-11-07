@@ -49,6 +49,13 @@ class SettingsService:
         return bool(self.database.get_setting("admin_password_hash"))
 
     @property
+    def proxy_step_completed(self) -> bool:
+        return bool(self.database.get_setting("setup_proxy_completed", False))
+
+    def mark_proxy_step_completed(self) -> None:
+        self.database.set_setting("setup_proxy_completed", True)
+
+    @property
     def api_configured(self) -> bool:
         return bool(self._get("api_id")) and bool(self._get("api_hash"))
 

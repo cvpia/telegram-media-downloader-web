@@ -32,6 +32,7 @@ from app.schemas import (
     ChatCreateRequest,
     ChatUpdateRequest,
     LoginRequest,
+    ProxySetupRequest,
     SettingsUpdate,
     TelegramCodeRequest,
     TelegramLoginStartRequest,
@@ -162,6 +163,7 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
     async def setup_status(request: Request) -> dict[str, Any]:
         services = service_container(request)
         return {
+            "proxy_step_completed": services.settings.proxy_step_completed,
             "admin_configured": services.settings.admin_configured,
             "api_configured": services.settings.api_configured,
             "telegram_connected": services.settings.telegram_connected,
@@ -169,6 +171,24 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             "chats_configured": bool(services.database.list_chats()),
             "ready": services.settings.ready,
         }
+
+    @app.post("/api/setup/proxy", dependencies=[Depends(csrf_header)])
+    async def setup_proxy(
+        payload: ProxySetupRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        services = service_container(request)
+        if services.settings.admin_configured:
+            raise HTTPException(status_code=409, detail="管理员已经初始化，请到系统设置中修改代理")
+        proxy_url = payload.proxy_url.strip()
+        if proxy_url:
+            try:
+                TelegramManager.parse_proxy(proxy_url)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        services.settings.update(SettingsUpdate(proxy_url=proxy_url))
+        services.settings.mark_proxy_step_completed()
+        return {"ok": True, "proxy_configured": bool(proxy_url)}
 
     @app.post("/api/setup/admin", dependencies=[Depends(csrf_header)])
     async def setup_admin(
@@ -439,6 +459,7 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             context=page_context(
                 request,
                 page="setup",
+                proxy_step_completed=services.settings.proxy_step_completed,
                 admin_configured=services.settings.admin_configured,
                 api_configured=services.settings.api_configured,
                 telegram_connected=services.settings.telegram_connected,

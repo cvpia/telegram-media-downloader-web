@@ -138,7 +138,7 @@ legend { margin-bottom: 10px; color: #dbe5f1; font-size: .86rem; font-weight: 65
 .content-heading p { max-width: 650px; margin-bottom: 0; }
 .setup-heading { max-width: 780px; margin-bottom: 28px; }
 .setup-shell { max-width: 1040px; margin: 0 auto; }
-.setup-progress { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 0 0 20px; padding: 0; list-style: none; }
+.setup-progress { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 0 0 20px; padding: 0; list-style: none; }
 .setup-progress li { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); font-size: .76rem; font-weight: 700; }
 .setup-progress li span { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: rgba(255,255,255,.05); color: var(--muted); }
 .setup-progress li.active { border-color: rgba(54,214,164,.45); background: var(--primary-soft); color: var(--text); }
@@ -227,7 +227,7 @@ legend { margin-bottom: 10px; color: #dbe5f1; font-size: .86rem; font-weight: 65
   .main-nav { order: 3; width: 100%; overflow-x: auto; }
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .panel-grid, .two-column-layout, .setup-chat-layout { grid-template-columns: 1fr; }
-  .setup-progress { grid-template-columns: repeat(5, minmax(72px, 1fr)); overflow-x: auto; }
+  .setup-progress { grid-template-columns: repeat(6, minmax(72px, 1fr)); overflow-x: auto; }
   .setup-progress li { min-width: 110px; }
 }
 @media (max-width: 640px) {

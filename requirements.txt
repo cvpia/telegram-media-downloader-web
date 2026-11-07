@@ -7,4 +7,4 @@ PyYAML==6.0.2
 cryptography==44.0.0
 itsdangerous==2.2.0
 https://github.com/tangyoha/pyrogram/archive/refs/tags/v2.0.69.zip
-TgCrypto==1.2.2
+TgCrypto==1.2.2; python_version < "3.13"

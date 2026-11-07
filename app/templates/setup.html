@@ -5,30 +5,46 @@
   <header class="setup-heading">
     <div class="eyebrow">ONE-TIME SETUP</div>
     <h1>一次配置，直接开始下载</h1>
-    <p class="muted">无需编辑 YAML，也无需进入容器终端。所有配置和 Telegram 登录都在这里完成。</p>
+    <p class="muted">先确认网络代理，再完成管理员、Telegram 和下载设置。所有步骤都在浏览器中完成。</p>
   </header>
 
   <ol class="setup-progress" aria-label="配置进度">
-    <li data-progress="1"><span>1</span>管理员</li>
-    <li data-progress="2"><span>2</span>API 凭据</li>
-    <li data-progress="3"><span>3</span>Telegram 登录</li>
-    <li data-progress="4"><span>4</span>下载设置</li>
-    <li data-progress="5"><span>5</span>添加频道</li>
+    <li data-progress="1"><span>1</span>网络代理</li>
+    <li data-progress="2"><span>2</span>管理员</li>
+    <li data-progress="3"><span>3</span>API 凭据</li>
+    <li data-progress="4"><span>4</span>Telegram 登录</li>
+    <li data-progress="5"><span>5</span>下载设置</li>
+    <li data-progress="6"><span>6</span>添加频道</li>
   </ol>
 
-  <div class="setup-card" data-admin="{{ 'true' if admin_configured else 'false' }}" data-api="{{ 'true' if api_configured else 'false' }}" data-telegram="{{ 'true' if telegram_connected else 'false' }}" data-chats="{{ 'true' if chats_configured else 'false' }}">
+  <div class="setup-card"
+       data-proxy="{{ 'true' if proxy_step_completed else 'false' }}"
+       data-admin="{{ 'true' if admin_configured else 'false' }}"
+       data-api="{{ 'true' if api_configured else 'false' }}"
+       data-telegram="{{ 'true' if telegram_connected else 'false' }}"
+       data-chats="{{ 'true' if chats_configured else 'false' }}">
     <section class="wizard-step" data-step="1">
-      <div class="step-heading"><span class="step-number">01</span><div><h2>设置管理密码</h2><p>该密码用于保护 Web 管理台，至少 8 位。</p></div></div>
-      <form id="admin-form" class="stack-form narrow-form">
-        <label><span>管理密码</span><input id="admin-password" type="password" minlength="8" autocomplete="new-password" required></label>
-        <label><span>确认密码</span><input id="admin-confirm" type="password" minlength="8" autocomplete="new-password" required></label>
-        <button class="button button-primary" type="submit">保存并继续</button>
+      <div class="step-heading"><span class="step-number">01</span><div><h2>设置网络代理</h2><p>如果本机可以直接访问 Telegram，可以留空并点击“跳过代理”。代理凭据会加密保存。</p></div></div>
+      <form id="proxy-form" class="stack-form narrow-form">
+        <label><span>代理地址（可选）</span><input id="setup-proxy-url" type="text" placeholder="socks5://user:password@127.0.0.1:1080" autocomplete="off"></label>
+        <div class="notice notice-info">支持 HTTP、HTTPS、SOCKS4 和 SOCKS5。示例：<code>socks5://127.0.0.1:7890</code></div>
+        <div class="button-row"><button class="button button-ghost" type="button" id="skip-proxy">跳过代理</button><button class="button button-primary" type="submit">保存并继续</button></div>
         <p class="form-error" data-error hidden></p>
       </form>
     </section>
 
     <section class="wizard-step" data-step="2">
-      <div class="step-heading"><span class="step-number">02</span><div><h2>连接 Telegram API</h2><p>在 <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org/apps</a> 创建应用后获取 API ID 和 API Hash。</p></div></div>
+      <div class="step-heading"><span class="step-number">02</span><div><h2>设置管理密码</h2><p>该密码用于保护 Web 管理台，至少 8 位。</p></div></div>
+      <form id="admin-form" class="stack-form narrow-form">
+        <label><span>管理密码</span><input id="admin-password" type="password" minlength="8" autocomplete="new-password" required></label>
+        <label><span>确认密码</span><input id="admin-confirm" type="password" minlength="8" autocomplete="new-password" required></label>
+        <div class="button-row"><button class="button button-ghost" type="button" id="admin-back">上一步</button><button class="button button-primary" type="submit">保存并继续</button></div>
+        <p class="form-error" data-error hidden></p>
+      </form>
+    </section>
+
+    <section class="wizard-step" data-step="3">
+      <div class="step-heading"><span class="step-number">03</span><div><h2>连接 Telegram API</h2><p>在 <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org/apps</a> 创建应用后获取 API ID 和 API Hash。</p></div></div>
       <form id="credentials-form" class="stack-form narrow-form">
         <label><span>API ID</span><input id="api-id" type="number" min="1" placeholder="例如 12345678" required></label>
         <label><span>API Hash</span><input id="api-hash" type="password" autocomplete="off" placeholder="32 位 API Hash" required></label>
@@ -37,8 +53,8 @@
       </form>
     </section>
 
-    <section class="wizard-step" data-step="3">
-      <div class="step-heading"><span class="step-number">03</span><div><h2>登录 Telegram 账号</h2><p>验证码会由 Telegram 官方发送。登录成功后，会话会保存在服务器本地。</p></div></div>
+    <section class="wizard-step" data-step="4">
+      <div class="step-heading"><span class="step-number">04</span><div><h2>登录 Telegram 账号</h2><p>验证码会由 Telegram 官方发送。登录成功后，会话会保存在本机。</p></div></div>
       <form id="phone-form" class="stack-form narrow-form">
         <label><span>手机号（国际格式）</span><input id="phone-number" type="tel" placeholder="+8613800000000" autocomplete="tel" required></label>
         <div class="button-row"><button class="button button-ghost" type="button" id="phone-back">上一步</button><button class="button button-primary" type="submit">发送验证码</button></div>
@@ -57,8 +73,8 @@
       </form>
     </section>
 
-    <section class="wizard-step" data-step="4">
-      <div class="step-heading"><span class="step-number">04</span><div><h2>下载偏好</h2><p>这些设置以后都可以在“系统设置”中修改。</p></div></div>
+    <section class="wizard-step" data-step="5">
+      <div class="step-heading"><span class="step-number">05</span><div><h2>下载偏好</h2><p>这些设置以后都可以在“系统设置”中修改。</p></div></div>
       <form id="preferences-form" class="stack-form">
         <label><span>保存目录</span><input id="download-dir" type="text" required></label>
         <fieldset><legend>媒体类型</legend><div class="check-grid" id="media-type-grid"></div></fieldset>
@@ -72,14 +88,13 @@
           <label><span>文档格式</span><input id="formats-document" type="text" value="all"></label>
           <label><span>视频格式</span><input id="formats-video" type="text" value="all"></label>
         </div>
-        <label><span>代理地址（可选）</span><input id="proxy-url" type="text" placeholder="socks5://127.0.0.1:1080"></label>
         <div class="button-row"><button class="button button-ghost" type="button" id="preferences-back">上一步</button><button class="button button-primary" type="submit">保存并继续</button></div>
         <p class="form-error" data-error hidden></p>
       </form>
     </section>
 
-    <section class="wizard-step" data-step="5">
-      <div class="step-heading"><span class="step-number">05</span><div><h2>添加下载频道</h2><p>可以填写 @username、频道 ID 或从已加入会话中选择。</p></div></div>
+    <section class="wizard-step" data-step="6">
+      <div class="step-heading"><span class="step-number">06</span><div><h2>添加下载频道</h2><p>可以填写 @username、频道 ID 或从已加入会话中选择。</p></div></div>
       <div class="setup-chat-layout">
         <form id="chat-form" class="stack-form">
           <label><span>频道 / 群组</span><input id="chat-ref" type="text" list="dialog-options" placeholder="@channel 或 -1001234567890" required><datalist id="dialog-options"></datalist></label>
@@ -100,9 +115,10 @@
 const setupCard = document.querySelector('.setup-card');
 const initial = setupCard.dataset;
 let currentStep = 1;
-if (initial.admin === 'true') currentStep = 2;
-if (initial.api === 'true') currentStep = 3;
-if (initial.telegram === 'true') currentStep = 4;
+if (initial.proxy === 'true') currentStep = 2;
+if (initial.admin === 'true') currentStep = 3;
+if (initial.api === 'true') currentStep = 4;
+if (initial.telegram === 'true') currentStep = 5;
 
 const mediaTypes = [
   ['audio', '音频'], ['document', '文档'], ['photo', '图片'], ['video', '视频'],
@@ -140,6 +156,27 @@ function showStep(step) {
   });
 }
 
+async function saveProxy(proxyUrl) {
+  await TMD.api('/api/setup/proxy', { method: 'POST', body: { proxy_url: proxyUrl } });
+  initial.proxy = 'true';
+  showStep(2);
+}
+
+document.getElementById('proxy-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  setError(form, '');
+  try {
+    await saveProxy(document.getElementById('setup-proxy-url').value.trim());
+  } catch (err) { setError(form, err.message); }
+});
+document.getElementById('skip-proxy').addEventListener('click', async () => {
+  const form = document.getElementById('proxy-form');
+  setError(form, '');
+  try { await saveProxy(''); } catch (err) { setError(form, err.message); }
+});
+document.getElementById('admin-back').addEventListener('click', () => showStep(1));
+
 document.getElementById('admin-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -149,7 +186,9 @@ document.getElementById('admin-form').addEventListener('submit', async (event) =
       password: document.getElementById('admin-password').value,
       confirm_password: document.getElementById('admin-confirm').value
     }});
-    showStep(2);
+    initial.admin = 'true';
+    await loadSettings();
+    showStep(3);
   } catch (err) { setError(form, err.message); }
 });
 
@@ -162,11 +201,11 @@ document.getElementById('credentials-form').addEventListener('submit', async (ev
       api_id: Number(document.getElementById('api-id').value),
       api_hash: document.getElementById('api-hash').value
     }});
-    if (initial.admin !== 'true') initial.admin = 'true';
-    showStep(3);
+    initial.api = 'true';
+    showStep(4);
   } catch (err) { setError(form, err.message); }
 });
-document.getElementById('credentials-back').addEventListener('click', () => showStep(1));
+document.getElementById('credentials-back').addEventListener('click', () => showStep(2));
 
 let loginId = null;
 document.getElementById('phone-form').addEventListener('submit', async (event) => {
@@ -201,7 +240,7 @@ document.getElementById('code-form').addEventListener('submit', async (event) =>
       return;
     }
     initial.telegram = 'true';
-    showStep(4);
+    showStep(5);
   } catch (err) { setError(form, err.message); }
 });
 document.getElementById('password-form').addEventListener('submit', async (event) => {
@@ -213,24 +252,22 @@ document.getElementById('password-form').addEventListener('submit', async (event
       login_id: loginId, password: document.getElementById('telegram-password').value
     }});
     initial.telegram = 'true';
-    showStep(4);
+    showStep(5);
   } catch (err) { setError(form, err.message); }
 });
+document.getElementById('phone-back').addEventListener('click', () => showStep(3));
 
 async function loadSettings() {
-  try {
-    const settings = await TMD.api('/api/settings');
-    document.getElementById('download-dir').value = settings.download_dir;
-    document.getElementById('filename-template').value = settings.filename_template;
-    document.getElementById('max-concurrent').value = settings.max_concurrent_downloads;
-    document.getElementById('formats-audio').value = (settings.file_formats.audio || ['all']).join(',');
-    document.getElementById('formats-document').value = (settings.file_formats.document || ['all']).join(',');
-    document.getElementById('formats-video').value = (settings.file_formats.video || ['all']).join(',');
-    checkboxGrid(document.getElementById('media-type-grid'), mediaTypes, settings.media_types);
-    checkboxGrid(document.getElementById('folder-part-grid'), folderParts, settings.folder_parts);
-  } catch (err) { TMD.toast(err.message, 'error'); }
+  const settings = await TMD.api('/api/settings');
+  document.getElementById('download-dir').value = settings.download_dir;
+  document.getElementById('filename-template').value = settings.filename_template;
+  document.getElementById('max-concurrent').value = settings.max_concurrent_downloads;
+  document.getElementById('formats-audio').value = (settings.file_formats.audio || ['all']).join(',');
+  document.getElementById('formats-document').value = (settings.file_formats.document || ['all']).join(',');
+  document.getElementById('formats-video').value = (settings.file_formats.video || ['all']).join(',');
+  checkboxGrid(document.getElementById('media-type-grid'), mediaTypes, settings.media_types);
+  checkboxGrid(document.getElementById('folder-part-grid'), folderParts, settings.folder_parts);
 }
-loadSettings();
 
 function checkedValues(selector) {
   return [...document.querySelectorAll(`${selector} input:checked`)].map((input) => input.value);
@@ -253,14 +290,13 @@ document.getElementById('preferences-form').addEventListener('submit', async (ev
         audio: parseFormats(document.getElementById('formats-audio').value),
         document: parseFormats(document.getElementById('formats-document').value),
         video: parseFormats(document.getElementById('formats-video').value)
-      },
-      proxy_url: document.getElementById('proxy-url').value
+      }
     }});
-    showStep(5);
+    showStep(6);
     await refreshChats();
   } catch (err) { setError(form, err.message); }
 });
-document.getElementById('preferences-back').addEventListener('click', () => showStep(3));
+document.getElementById('preferences-back').addEventListener('click', () => showStep(4));
 
 async function refreshChats() {
   const chats = await TMD.api('/api/chats');
@@ -309,6 +345,11 @@ document.getElementById('setup-chat-list').addEventListener('click', async (even
 });
 document.getElementById('finish-setup').addEventListener('click', () => window.location.href = '/');
 showStep(currentStep);
-refreshChats().catch(() => {});
+if (initial.admin === 'true') {
+  loadSettings().catch((err) => TMD.toast(err.message, 'error'));
+}
+if (initial.proxy === 'true' && initial.admin === 'true') {
+  refreshChats().catch(() => {});
+}
 </script>
 {% endblock %}

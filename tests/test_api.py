@@ -25,6 +25,8 @@ def test_setup_page_renders_version_and_csrf(client: TestClient):
     assert f"v{APP_VERSION}" in response.text
     assert 'name="csrf-token"' in response.text
     assert "一次配置，直接开始下载" in response.text
+    assert "设置网络代理" in response.text
+    assert '<li data-progress="1"><span>1</span>网络代理</li>' in response.text
 
 
 def test_csrf_is_required(client: TestClient):
@@ -197,3 +199,31 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert chats_page.status_code == 200
     assert "频道管理" in chats_page.text
     assert token
+
+def test_proxy_is_first_setup_step_and_can_be_skipped(client: TestClient):
+    token = get_csrf(client)
+    status = client.get("/api/setup/status").json()
+    assert status["proxy_step_completed"] is False
+
+    response = client.post(
+        "/api/setup/proxy",
+        json={"proxy_url": "socks5://user:pass@127.0.0.1:1080"},
+        headers={"X-CSRF-Token": token},
+    )
+    assert response.status_code == 200, response.text
+    assert client.get("/api/setup/status").json()["proxy_step_completed"] is True
+    raw_proxy = client.app.state.services.database.get_setting("proxy_url")
+    assert raw_proxy.startswith("fernet:")
+
+
+def test_proxy_can_be_skipped_without_redirect_loop(client: TestClient):
+    token = get_csrf(client)
+    response = client.post(
+        "/api/setup/proxy",
+        json={"proxy_url": ""},
+        headers={"X-CSRF-Token": token},
+    )
+    assert response.status_code == 200
+    assert response.json()["proxy_configured"] is False
+    assert client.get("/api/setup/status").json()["proxy_step_completed"] is True
+    assert client.get("/setup").status_code == 200

@@ -44,7 +44,7 @@ http://localhost:8000
 
 ## 本地开发
 
-需要 Python 3.12：
+需要 Python 3.12 或 3.13。Python 3.13 会使用纯 Python 加密回退，Python 3.12 会安装 TgCrypto 加速：
 
 ```bash
 python -m venv .venv

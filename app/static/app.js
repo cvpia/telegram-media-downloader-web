@@ -27,7 +27,7 @@
       cache: 'no-store'
     });
     if (response.status === 401) {
-      if (window.location.pathname !== '/login') window.location.href = '/login';
+      if (!['/login', '/setup'].includes(window.location.pathname)) window.location.href = '/login';
       throw new Error('登录状态已失效');
     }
     const contentType = response.headers.get('content-type') || '';
