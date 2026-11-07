@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}系统设置 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-heading">
+  <div><div class="eyebrow">CONFIGURATION</div><h1>系统设置</h1><p class="muted">所有配置在 Web 端生效，敏感凭据会加密保存。</p></div>
+  <a class="button button-primary" href="/">返回下载中心</a>
+</section>
+
+<section class="two-column-layout settings-layout">
+  <article class="panel">
+    <div class="panel-heading"><div><h2>Telegram 连接</h2><p class="muted">当前状态：{{ '已登录' if telegram_connected else '未登录' }}</p></div><span class="tag {{ 'tag-success' if telegram_connected else 'tag-warning' }}">{{ '在线' if telegram_connected else '待配置' }}</span></div>
+    <div class="settings-actions">
+      <a class="button button-ghost" href="/setup">重新运行登录向导</a>
+      <button class="button button-danger" id="telegram-logout" type="button" {{ '' if telegram_connected else 'disabled' }}>退出 Telegram</button>
+    </div>
+    <div class="notice notice-info">API Hash、Bot Token 等敏感配置使用本地密钥加密，不会以明文写入数据库。</div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-heading"><div><h2>YAML 兼容</h2><p class="muted">迁移旧版配置或备份当前设置</p></div></div>
+    <div class="settings-actions"><a class="button button-ghost" href="/api/settings/export.yaml">导出 YAML</a><label class="button button-ghost file-button">导入 YAML<input id="yaml-file" type="file" accept=".yaml,.yml"></label></div>
+  </article>
+</section>
+
+<form id="settings-form" class="stack-form settings-form">
+  <article class="panel">
+    <div class="panel-heading"><div><h2>Telegram API</h2><p class="muted">来自 my.telegram.org/apps</p></div></div>
+    <div class="form-grid">
+      <label><span>API ID</span><input id="api-id" type="number" min="1"></label>
+      <label><span>API Hash</span><input id="api-hash" type="password" autocomplete="off" placeholder="已配置，留空则不修改"></label>
+    </div>
+    <label><span>代理地址</span><input id="proxy-url" type="text" placeholder="socks5://user:password@127.0.0.1:1080"></label>
+  </article>
+
+  <article class="panel">
+    <div class="panel-heading"><div><h2>下载设置</h2><p class="muted">媒体类型、目录模板和并发数</p></div></div>
+    <label><span>保存目录</span><input id="download-dir" type="text" required></label>
+    <fieldset><legend>媒体类型</legend><div class="check-grid" id="media-type-grid"></div></fieldset>
+    <fieldset><legend>目录结构</legend><div class="check-grid" id="folder-part-grid"></div></fieldset>
+    <div class="form-grid">
+      <label><span>文件名模板</span><input id="filename-template" type="text" required><small>可用占位符：{message_id}、{file_name}、{media_type}、{date}</small></label>
+      <label><span>最大并发下载数</span><input id="max-concurrent" type="number" min="1" max="10" required></label>
+    </div>
+    <div class="form-grid three">
+      <label><span>音频格式</span><input id="formats-audio" type="text" placeholder="all 或 mp3,flac"></label>
+      <label><span>文档格式</span><input id="formats-document" type="text" placeholder="all 或 pdf,epub"></label>
+      <label><span>视频格式</span><input id="formats-video" type="text" placeholder="all 或 mp4,mkv"></label>
+    </div>
+  </article>
+
+  <div class="sticky-actions"><p class="form-error" id="settings-error" hidden></p><button class="button button-primary button-large" type="submit">保存全部设置</button></div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+const initialSettings = {{ settings | tojson }};
+const mediaTypes = [
+  ['audio', '音频'], ['document', '文档'], ['photo', '图片'], ['video', '视频'],
+  ['voice', '语音'], ['video_note', '视频消息'], ['animation', 'GIF / 动画']
+];
+const folderParts = [
+  ['chat_title', '频道名称'], ['year', '年份'], ['month', '年月'], ['date', '日期'], ['media_type', '媒体类型']
+];
+function checkboxGrid(element, entries, checked) {
+  element.innerHTML = entries.map(([value, label]) => `<label class="check-item"><input type="checkbox" value="${value}" ${checked.includes(value) ? 'checked' : ''}><span>${label}</span></label>`).join('');
+}
+function checkedValues(selector) {
+  return [...document.querySelectorAll(`${selector} input:checked`)].map((input) => input.value);
+}
+function parseFormats(value) {
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
+}
+function populate(settings) {
+  document.getElementById('api-id').value = settings.api_id || '';
+  document.getElementById('api-hash').value = '';
+  document.getElementById('api-hash').placeholder = settings.api_hash_configured ? '已配置，留空则不修改' : '请输入 API Hash';
+  document.getElementById('proxy-url').value = '';
+  document.getElementById('proxy-url').placeholder = settings.proxy_configured ? '已配置，留空则清除' : 'socks5://127.0.0.1:1080';
+  document.getElementById('download-dir').value = settings.download_dir;
+  document.getElementById('filename-template').value = settings.filename_template;
+  document.getElementById('max-concurrent').value = settings.max_concurrent_downloads;
+  document.getElementById('formats-audio').value = (settings.file_formats.audio || ['all']).join(',');
+  document.getElementById('formats-document').value = (settings.file_formats.document || ['all']).join(',');
+  document.getElementById('formats-video').value = (settings.file_formats.video || ['all']).join(',');
+  checkboxGrid(document.getElementById('media-type-grid'), mediaTypes, settings.media_types);
+  checkboxGrid(document.getElementById('folder-part-grid'), folderParts, settings.folder_parts);
+}
+populate(initialSettings);
+
+document.getElementById('settings-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const error = document.getElementById('settings-error');
+  error.hidden = true;
+  try {
+    const body = {
+      download_dir: document.getElementById('download-dir').value,
+      media_types: checkedValues('#media-type-grid'),
+      folder_parts: checkedValues('#folder-part-grid'),
+      filename_template: document.getElementById('filename-template').value,
+      max_concurrent_downloads: Number(document.getElementById('max-concurrent').value),
+      file_formats: {
+        audio: parseFormats(document.getElementById('formats-audio').value),
+        document: parseFormats(document.getElementById('formats-document').value),
+        video: parseFormats(document.getElementById('formats-video').value)
+      }
+    };
+    const apiId = Number(document.getElementById('api-id').value);
+    if (apiId) body.api_id = apiId;
+    const apiHash = document.getElementById('api-hash').value.trim();
+    if (apiHash) body.api_hash = apiHash;
+    body.proxy_url = document.getElementById('proxy-url').value.trim();
+    const settings = await TMD.api('/api/settings', { method: 'PUT', body });
+    initialSettings.api_hash_configured = settings.api_hash_configured;
+    initialSettings.proxy_configured = settings.proxy_configured;
+    TMD.toast('设置已保存', 'success');
+  } catch (err) {
+    error.textContent = err.message;
+    error.hidden = false;
+  }
+});
+
+document.getElementById('yaml-file').addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const body = new FormData();
+  body.append('file', file);
+  try {
+    const result = await TMD.api('/api/settings/import.yaml', { method: 'POST', body });
+    TMD.toast(`已导入配置和 ${result.chats_imported} 个频道，正在刷新`, 'success');
+    setTimeout(() => window.location.reload(), 800);
+  } catch (err) { TMD.toast(err.message, 'error'); }
+  event.target.value = '';
+});
+
+document.getElementById('telegram-logout').addEventListener('click', async () => {
+  if (!confirm('确定退出 Telegram 登录吗？退出后需要重新输入验证码。')) return;
+  try {
+    await TMD.api('/api/telegram/logout', { method: 'POST' });
+    TMD.toast('已退出 Telegram', 'success');
+    setTimeout(() => window.location.reload(), 600);
+  } catch (err) { TMD.toast(err.message, 'error'); }
+});
+</script>
+{% endblock %}

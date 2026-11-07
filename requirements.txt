@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+jinja2==3.1.5
+python-multipart==0.0.20
+pydantic==2.10.5
+PyYAML==6.0.2
+cryptography==44.0.0
+itsdangerous==2.2.0
+https://github.com/tangyoha/pyrogram/archive/refs/tags/v2.0.69.zip
+TgCrypto==1.2.2

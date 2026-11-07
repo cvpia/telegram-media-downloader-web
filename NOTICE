@@ -1,0 +1,4 @@
+This project is a from-scratch FastAPI web rewrite inspired by the feature set of
+tangyoha/telegram_media_downloader. The original project and its contributors are
+credited under the MIT License. The Telegram download behavior uses the open-source
+Pyrogram client library.

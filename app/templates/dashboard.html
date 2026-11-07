@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}下载中心 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-heading">
+  <div><div class="eyebrow">DASHBOARD</div><h1>下载中心</h1><p class="muted">查看 Telegram 媒体下载状态、进度和历史记录。</p></div>
+  <div class="button-row" id="download-controls">
+    <button class="button button-primary" data-action="start">开始下载</button>
+    <button class="button button-ghost" data-action="pause">暂停</button>
+    <button class="button button-ghost" data-action="resume">继续</button>
+    <button class="button button-danger" data-action="stop">停止</button>
+  </div>
+</section>
+
+{% if not ready %}
+<div class="notice notice-warning">
+  <strong>配置尚未完成。</strong>
+  请先完成 Telegram 登录并至少添加一个频道。 <a href="/setup">继续配置</a>
+</div>
+{% endif %}
+
+<section class="stats-grid">
+  <article class="stat-card"><span>服务状态</span><strong class="state-value" id="stat-state">待机</strong><small id="stat-current">—</small></article>
+  <article class="stat-card"><span>已配置频道</span><strong id="stat-chats">0</strong><small>启用中的下载来源</small></article>
+  <article class="stat-card"><span>Telegram</span><strong id="stat-telegram">{{ '已连接' if telegram_connected else '未登录' }}</strong><small>本地会话登录</small></article>
+  <article class="stat-card"><span>最近完成</span><strong id="stat-completed">0</strong><small>当前显示的历史记录</small></article>
+</section>
+
+{% if status.last_error %}
+<div class="notice notice-error" id="last-error"><strong>最近错误：</strong><span>{{ status.last_error }}</span></div>
+{% else %}
+<div class="notice notice-error" id="last-error" hidden><strong>最近错误：</strong><span></span></div>
+{% endif %}
+
+<section class="panel-grid">
+  <article class="panel">
+    <div class="panel-heading"><div><h2>正在下载</h2><p class="muted">由服务器实时推送</p></div><span class="live-dot">LIVE</span></div>
+    <div id="active-list" class="task-list"><p class="empty-state">暂无正在进行的任务</p></div>
+  </article>
+  <article class="panel">
+    <div class="panel-heading"><div><h2>下载来源</h2><p class="muted">已添加的频道和群组</p></div><a class="text-link" href="/chats">管理频道</a></div>
+    <div id="chat-list" class="task-list">
+      {% if chats %}
+        {% for chat in chats %}
+        <div class="task-row"><div><strong>{{ chat.title or chat.chat_ref }}</strong><small>{{ chat.chat_ref }} · 进度消息 #{{ chat.last_message_id }}</small></div><span class="tag {{ 'tag-success' if chat.enabled else '' }}">{{ '启用' if chat.enabled else '停用' }}</span></div>
+        {% endfor %}
+      {% else %}
+        <p class="empty-state">尚未添加频道</p>
+      {% endif %}
+    </div>
+  </article>
+</section>
+
+<section class="panel">
+  <div class="panel-heading"><div><h2>下载记录</h2><p class="muted">最近 50 条任务</p></div></div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>状态</th><th>频道</th><th>文件</th><th>媒体</th><th>进度</th><th>开始时间</th></tr></thead>
+      <tbody id="history-body">
+        {% for item in status.recent %}
+        <tr><td><span class="tag">{{ item.status }}</span></td><td>{{ item.chat_title }}</td><td class="file-cell" title="{{ item.file_name }}">{{ item.file_name }}</td><td>{{ item.media_type }}</td><td>{{ item.downloaded_size }} / {{ item.total_size }}</td><td>{{ item.started_at }}</td></tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-state">暂无下载记录</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const stateLabels = { stopped: '待机', running: '运行中', paused: '已暂停', completed: '已完成', error: '异常' };
+
+function formatBytes(value) {
+  const number = Number(value || 0);
+  if (!number) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = Math.min(Math.floor(Math.log(number) / Math.log(1024)), units.length - 1);
+  return `${(number / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function progressPercent(item) {
+  if (!item.total) return item.status === 'completed' ? 100 : 0;
+  return Math.min(100, Math.round(item.downloaded_size / item.total * 100));
+}
+
+function renderStatus(data) {
+  const state = document.getElementById('stat-state');
+  state.textContent = stateLabels[data.state] || data.state;
+  state.dataset.state = data.state;
+  document.getElementById('stat-current').textContent = data.current_chat || (data.state === 'completed' ? '全部任务完成' : '—');
+  document.getElementById('stat-chats').textContent = (data.chats || []).filter((chat) => chat.enabled).length;
+  document.getElementById('stat-completed').textContent = (data.recent || []).filter((item) => item.status === 'completed').length;
+
+  const active = data.active || [];
+  document.getElementById('active-list').innerHTML = active.length ? active.map((item) => {
+    const percent = item.total ? Math.round(item.downloaded / item.total * 100) : 0;
+    return `<div class="task-row task-row-stack"><div class="task-line"><div><strong>${TMD.escape(item.file_name)}</strong><small>${TMD.escape(item.chat)} · 消息 #${item.message_id}</small></div><span>${formatBytes(item.downloaded)} / ${formatBytes(item.total)}</span></div><div class="progress"><span style="width:${percent}%"></span></div></div>`;
+  }).join('') : '<p class="empty-state">暂无正在进行的任务</p>';
+
+  const error = document.getElementById('last-error');
+  if (data.last_error) {
+    error.hidden = false;
+    error.querySelector('span').textContent = data.last_error;
+  } else {
+    error.hidden = true;
+  }
+
+  const rows = (data.recent || []).map((item) => `<tr><td><span class="tag tag-${TMD.escape(item.status)}">${TMD.escape(item.status)}</span></td><td>${TMD.escape(item.chat_title)}</td><td class="file-cell" title="${TMD.escape(item.file_name)}">${TMD.escape(item.file_name)}</td><td>${TMD.escape(item.media_type)}</td><td><div class="inline-progress"><span style="width:${progressPercent(item)}%"></span></div><small>${formatBytes(item.downloaded_size)} / ${formatBytes(item.total_size)}</small></td><td>${TMD.escape(item.started_at)}</td></tr>`).join('');
+  document.getElementById('history-body').innerHTML = rows || '<tr><td colspan="6" class="empty-state">暂无下载记录</td></tr>';
+}
+
+document.querySelectorAll('[data-action]').forEach((button) => {
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const result = await TMD.api(`/api/downloads/${button.dataset.action}`, { method: 'POST' });
+      renderStatus(result);
+      TMD.toast('下载状态已更新', 'success');
+    } catch (err) { TMD.toast(err.message, 'error'); }
+    finally { button.disabled = false; }
+  });
+});
+
+let source = null;
+function connectEvents() {
+  if (source) source.close();
+  source = new EventSource('/api/events');
+  source.onmessage = (event) => {
+    try { renderStatus(JSON.parse(event.data)); } catch (_) {}
+  };
+  source.onerror = () => {
+    source.close();
+    setTimeout(connectEvents, 3000);
+  };
+}
+TMD.api('/api/downloads/status').then(renderStatus).catch((err) => TMD.toast(err.message, 'error'));
+connectEvents();
+</script>
+{% endblock %}

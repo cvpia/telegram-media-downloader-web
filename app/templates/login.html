@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}登录 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="auth-shell">
+  <article class="auth-card">
+    <div class="eyebrow">ADMIN ACCESS</div>
+    <h1>欢迎回来</h1>
+    <p class="muted">输入管理密码进入 Telegram 媒体下载中心。</p>
+    <form id="login-form" class="stack-form">
+      <label>
+        <span>管理密码</span>
+        <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+      </label>
+      <button class="button button-primary button-wide" type="submit">登录管理台</button>
+    </form>
+    <p class="form-error" id="login-error" hidden></p>
+  </article>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const form = document.getElementById('login-form');
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = form.querySelector('button');
+  const error = document.getElementById('login-error');
+  error.hidden = true;
+  button.disabled = true;
+  try {
+    await TMD.api('/api/auth/login', { method: 'POST', body: { password: document.getElementById('password').value } });
+    window.location.href = '/';
+  } catch (err) {
+    error.textContent = err.message;
+    error.hidden = false;
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+{% endblock %}

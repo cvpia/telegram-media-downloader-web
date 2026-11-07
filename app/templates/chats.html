@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}频道管理 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="content-heading">
+  <div><div class="eyebrow">SOURCES</div><h1>频道管理</h1><p class="muted">添加 Telegram 频道、群组或机器人会话，并控制是否参与下载。</p></div>
+  <a class="button button-primary" href="/">返回下载中心</a>
+</section>
+
+{% if not telegram_connected %}
+<div class="notice notice-warning"><strong>Telegram 尚未登录。</strong> 可以手动填写频道，但读取会话列表前需要完成登录。<a href="/setup">继续配置</a></div>
+{% endif %}
+
+<section class="two-column-layout">
+  <article class="panel">
+    <div class="panel-heading"><div><h2>添加频道</h2><p class="muted">重复添加会更新现有配置</p></div></div>
+    <form id="chat-form" class="stack-form">
+      <label><span>频道 / 群组</span><input id="chat-ref" type="text" list="dialog-options" placeholder="@channel 或 -1001234567890" required><datalist id="dialog-options"></datalist></label>
+      <label><span>显示名称（可选）</span><input id="chat-title" type="text" placeholder="不填写时自动读取"></label>
+      <div class="form-grid"><label><span>开始日期</span><input id="date-from" type="date"></label><label><span>结束日期</span><input id="date-to" type="date"></label></div>
+      <div class="button-row"><button class="button button-ghost" type="button" id="load-dialogs">读取我的会话</button><button class="button button-primary" type="submit">保存频道</button></div>
+      <p class="form-error" data-error hidden></p>
+    </form>
+  </article>
+  <article class="panel">
+    <div class="panel-heading"><div><h2>已配置来源</h2><p class="muted">下载进度消息 ID 会自动保存</p></div></div>
+    <div id="chat-table" class="task-list"></div>
+  </article>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const initialChats = {{ chats | tojson }};
+function renderChats(chats) {
+  const container = document.getElementById('chat-table');
+  if (!chats.length) {
+    container.innerHTML = '<p class="empty-state">尚未添加频道</p>';
+    return;
+  }
+  container.innerHTML = chats.map((chat) => `<div class="task-row task-row-stack"><div class="task-line"><div><strong>${TMD.escape(chat.title || chat.chat_ref)}</strong><small>${TMD.escape(chat.chat_ref)} · 进度消息 #${chat.last_message_id}</small></div><div class="row-actions"><button class="link-button" data-toggle="${chat.id}" data-enabled="${chat.enabled}">${chat.enabled ? '停用' : '启用'}</button><button class="link-button danger-text" data-delete="${chat.id}">删除</button></div></div><div class="meta-row"><span class="tag ${chat.enabled ? 'tag-success' : ''}">${chat.enabled ? '启用' : '停用'}</span><span>${chat.date_from || '最早消息'} → ${chat.date_to || '最新消息'}</span></div></div>`).join('');
+}
+async function refreshChats() {
+  const chats = await TMD.api('/api/chats');
+  renderChats(chats);
+}
+document.getElementById('chat-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = form.querySelector('[data-error]');
+  error.hidden = true;
+  try {
+    await TMD.api('/api/chats', { method: 'POST', body: {
+      chat_ref: document.getElementById('chat-ref').value,
+      title: document.getElementById('chat-title').value,
+      date_from: document.getElementById('date-from').value || null,
+      date_to: document.getElementById('date-to').value || null
+    }});
+    form.reset();
+    await refreshChats();
+    TMD.toast('频道已保存', 'success');
+  } catch (err) { error.textContent = err.message; error.hidden = false; }
+});
+document.getElementById('load-dialogs').addEventListener('click', async (event) => {
+  event.currentTarget.disabled = true;
+  try {
+    const dialogs = await TMD.api('/api/telegram/dialogs');
+    document.getElementById('dialog-options').innerHTML = dialogs.map((dialog) => `<option value="${TMD.escape(dialog.username ? '@' + dialog.username : dialog.id)}">${TMD.escape(dialog.title)}</option>`).join('');
+    TMD.toast(`已读取 ${dialogs.length} 个会话`, 'success');
+  } catch (err) { TMD.toast(err.message, 'error'); }
+  finally { event.currentTarget.disabled = false; }
+});
+document.getElementById('chat-table').addEventListener('click', async (event) => {
+  const toggle = event.target.closest('[data-toggle]');
+  const remove = event.target.closest('[data-delete]');
+  try {
+    if (toggle) {
+      await TMD.api(`/api/chats/${toggle.dataset.toggle}`, { method: 'PATCH', body: { enabled: toggle.dataset.enabled !== '1' } });
+      await refreshChats();
+    }
+    if (remove) {
+      await TMD.api(`/api/chats/${remove.dataset.delete}`, { method: 'DELETE' });
+      await refreshChats();
+    }
+  } catch (err) { TMD.toast(err.message, 'error'); }
+});
+renderChats(initialChats);
+</script>
+{% endblock %}

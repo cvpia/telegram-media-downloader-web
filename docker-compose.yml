@@ -1,0 +1,21 @@
+services:
+  telegram-media-downloader:
+    build:
+      context: .
+      target: runtime
+    container_name: telegram-media-downloader
+    ports:
+      - "8000:8000"
+    environment:
+      TMD_DATA_DIR: /data
+      TMD_DOWNLOAD_DIR: /downloads
+    volumes:
+      - ./data:/data
+      - ./downloads:/downloads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
