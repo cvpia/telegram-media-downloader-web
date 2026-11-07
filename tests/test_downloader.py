@@ -143,6 +143,35 @@ def test_downloader_snapshot_reports_speed_progress_and_disk(tmp_path: Path):
     assert 0 <= snapshot["resource"]["disk_percent"] <= 100
 
 
+def test_downloader_snapshot_marks_stalled_transfer_as_waiting(tmp_path: Path):
+    settings = SimpleNamespace(download_dir=lambda: tmp_path)
+    database = SimpleNamespace(
+        recent_downloads=lambda limit: [],
+        list_chats=lambda: [],
+    )
+    service = DownloaderService(database, settings, telegram=None)
+    now = time.monotonic()
+    service._active[1] = {
+        "record_id": 1,
+        "chat": "Demo",
+        "message_id": 10,
+        "file_name": "demo.mp4",
+        "media_type": "video",
+        "downloaded": 5 * 1024 * 1024,
+        "total": 10 * 1024 * 1024,
+        "status": "downloading",
+        "started_at": time.time(),
+        "speed": 1024 * 1024,
+        "last_sample_at": now - 8,
+    }
+
+    snapshot = service.snapshot()
+
+    assert snapshot["active"][0]["status"] == "waiting"
+    assert snapshot["active"][0]["speed"] == 0.0
+    assert snapshot["active"][0]["waiting_seconds"] >= 7
+
+
 @pytest.mark.asyncio
 async def test_channel_filter_skips_non_matching_media(tmp_path: Path, monkeypatch):
     chat = {
@@ -482,8 +511,8 @@ async def test_download_resumes_from_partial_chunk(tmp_path: Path, monkeypatch):
     updates = []
 
     class FakeClient:
-        async def get_file(self, file_id, file_size, offset):
-            calls.append((file_id, file_size, offset))
+        async def get_file(self, file_id, file_size, offset, limit=0):
+            calls.append((file_id, file_size, offset, limit))
             yield payload[offset * DOWNLOAD_CHUNK_SIZE :]
 
     database = SimpleNamespace(
@@ -509,7 +538,7 @@ async def test_download_resumes_from_partial_chunk(tmp_path: Path, monkeypatch):
     )
 
     assert success is True
-    assert calls == [("decoded:telegram-file", len(payload), 1)]
+    assert calls == [("decoded:telegram-file", len(payload), 1, 1)]
     assert destination.read_bytes() == payload
     assert not partial.exists()
     assert any(update[1].get("status") == "completed" for update in updates)
@@ -522,7 +551,7 @@ async def test_failed_download_keeps_partial_for_resume(tmp_path: Path, monkeypa
     updates = []
 
     class FakeClient:
-        async def get_file(self, file_id, file_size, offset):
+        async def get_file(self, file_id, file_size, offset, limit=0):
             yield b"partial-data"
             raise RuntimeError("connection lost")
 
@@ -551,6 +580,97 @@ async def test_failed_download_keeps_partial_for_resume(tmp_path: Path, monkeypa
     assert not destination.exists()
     assert any(update[1].get("status") == "failed" for update in updates)
     assert service.last_error
+
+
+@pytest.mark.asyncio
+async def test_download_requests_one_telegram_chunk_at_a_time(
+    tmp_path: Path, monkeypatch
+):
+    payload = (
+        b"a" * DOWNLOAD_CHUNK_SIZE
+        + b"b" * DOWNLOAD_CHUNK_SIZE
+        + b"tail"
+    )
+    destination = tmp_path / "video.mp4"
+    calls = []
+    updates = []
+
+    class FakeClient:
+        async def get_file(self, file_id, file_size, offset, limit=0):
+            calls.append((offset, limit))
+            start = offset * DOWNLOAD_CHUNK_SIZE
+            yield payload[start : start + DOWNLOAD_CHUNK_SIZE]
+
+    database = SimpleNamespace(
+        create_download=lambda *args: 10,
+        update_download=lambda download_id, **kwargs: updates.append(
+            (download_id, kwargs)
+        ),
+    )
+    telegram = SimpleNamespace(get_client=lambda: _async_value(FakeClient()))
+    service = DownloaderService(
+        database,
+        SimpleNamespace(max_concurrent_downloads=lambda: 3),
+        telegram,
+    )
+    monkeypatch.setattr("app.downloader.FileId.decode", lambda file_id: file_id)
+
+    success = await service._perform_download_message(
+        message=SimpleNamespace(id=44),
+        media=SimpleNamespace(file_id="telegram-file", file_size=len(payload)),
+        media_type="video",
+        file_name="video.mp4",
+        chat_id=1,
+        chat_title="Chunked",
+        destination_override=destination,
+    )
+
+    assert success is True
+    assert calls == [(0, 1), (1, 1), (2, 1)]
+    assert destination.read_bytes() == payload
+    assert any(update[1].get("status") == "completed" for update in updates)
+
+
+@pytest.mark.asyncio
+async def test_stalled_telegram_chunk_stops_and_keeps_partial(
+    tmp_path: Path, monkeypatch
+):
+    destination = tmp_path / "video.mp4"
+    updates = []
+    monkeypatch.setattr("app.downloader.TELEGRAM_TRANSFER_STALL_TIMEOUT", 0.01)
+
+    class FakeClient:
+        async def get_file(self, file_id, file_size, offset, limit=0):
+            await asyncio.sleep(1)
+            yield b"late-data"
+
+    database = SimpleNamespace(
+        create_download=lambda *args: 11,
+        update_download=lambda download_id, **kwargs: updates.append(
+            (download_id, kwargs)
+        ),
+    )
+    telegram = SimpleNamespace(get_client=lambda: _async_value(FakeClient()))
+    service = DownloaderService(database, SimpleNamespace(), telegram)
+    monkeypatch.setattr("app.downloader.FileId.decode", lambda file_id: file_id)
+
+    success = await service._perform_download_message(
+        message=SimpleNamespace(id=45),
+        media=SimpleNamespace(file_id="telegram-file", file_size=20),
+        media_type="video",
+        file_name="video.mp4",
+        chat_id=1,
+        chat_title="Stalled",
+        destination_override=destination,
+    )
+
+    assert success is False
+    assert not destination.exists()
+    failed_updates = [
+        update[1] for update in updates if update[1].get("status") == "failed"
+    ]
+    assert failed_updates
+    assert "未返回媒体数据" in failed_updates[-1]["error"]
 
 
 @pytest.mark.asyncio

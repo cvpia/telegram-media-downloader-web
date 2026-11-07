@@ -85,7 +85,7 @@
         <fieldset><legend>目录结构</legend><div class="check-grid" id="folder-part-grid"></div></fieldset>
         <div class="form-grid">
           <label><span>文件名模板</span><input id="filename-template" type="text" value="{message_id} - {file_name}" required></label>
-          <label><span>并发下载数</span><input id="max-concurrent" type="number" min="1" max="10" value="1" required><small>按同时进行的媒体文件下载数计算，保存后立即生效</small></label>
+          <label><span>并发下载数</span><input id="max-concurrent" type="number" min="1" max="10" value="1" required><small>保存后立即生效；遇到 Telegram 限流时会自动降到安全速度并逐步恢复</small></label>
         </div>
         <div class="form-grid three">
           <label><span>音频格式</span><input id="formats-audio" type="text" value="all"></label>

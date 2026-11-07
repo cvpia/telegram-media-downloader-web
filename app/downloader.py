@@ -8,7 +8,7 @@ import mimetypes
 import re
 import shutil
 import time
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,7 @@ from app.download_filter import build_filter_context, compile_download_filter
 from app.schemas import parse_date_bound
 from app.settings_service import SettingsService
 from app.telegram_manager import TelegramManager
+from app.telegram_transfer import AdaptiveTransferGate
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ EXTENSION_OVERRIDES = {
 }
 INVALID_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+TELEGRAM_TRANSFER_STALL_TIMEOUT = 90.0
 
 
 def detect_media(message: Any) -> tuple[str, Any] | None:
@@ -198,6 +200,9 @@ class DownloaderService:
         self._concurrency_condition = asyncio.Condition()
         self._download_slots_in_use = 0
         self._direct_tasks: set[asyncio.Task[None]] = set()
+        self._transfer_gate = AdaptiveTransferGate(
+            self._configured_concurrency_limit
+        )
 
     @staticmethod
     def _active_snapshot(item: dict[str, Any], now: float | None = None) -> dict[str, Any]:
@@ -211,6 +216,14 @@ class DownloaderService:
         sample_at = float(item.get("last_sample_at") or now)
         if now - sample_at > 3:
             speed = 0.0
+        waiting = now - sample_at >= 3 and (
+            total <= 0 or downloaded < total
+        )
+        if waiting:
+            item["status"] = "waiting"
+            item["waiting_seconds"] = round(now - sample_at)
+        else:
+            item["status"] = "downloading"
         remaining = max(0, total - downloaded)
         item.update(
             {
@@ -347,7 +360,7 @@ class DownloaderService:
         await self.stop()
 
     async def refresh_concurrency_limit(self) -> None:
-        limit = max(1, min(int(self.settings.max_concurrent_downloads()), 10))
+        limit = self._configured_concurrency_limit()
         update_transmissions = getattr(
             self.telegram, "set_max_concurrent_transmissions", None
         )
@@ -358,11 +371,11 @@ class DownloaderService:
 
     @asynccontextmanager
     async def _download_slot(self):
-        limit = max(1, min(int(self.settings.max_concurrent_downloads()), 10))
+        limit = self._configured_concurrency_limit()
         async with self._concurrency_condition:
             while self._download_slots_in_use >= limit:
                 await self._concurrency_condition.wait()
-                limit = max(1, min(int(self.settings.max_concurrent_downloads()), 10))
+                limit = self._configured_concurrency_limit()
             self._download_slots_in_use += 1
         try:
             yield
@@ -370,6 +383,11 @@ class DownloaderService:
             async with self._concurrency_condition:
                 self._download_slots_in_use = max(0, self._download_slots_in_use - 1)
                 self._concurrency_condition.notify_all()
+
+    def _configured_concurrency_limit(self) -> int:
+        getter = getattr(self.settings, "max_concurrent_downloads", None)
+        value = getter() if callable(getter) else 1
+        return max(1, min(int(value), 10))
 
     async def _run(self) -> None:
         try:
@@ -739,6 +757,36 @@ class DownloaderService:
                 client_override=client_override,
             )
 
+    async def _read_telegram_chunk(
+        self,
+        client: Any,
+        decoded_file_id: Any,
+        file_size: int,
+        chunk_index: int,
+    ) -> bytes:
+        async def read_one() -> bytes:
+            chunks = client.get_file(
+                decoded_file_id,
+                file_size=file_size,
+                limit=1,
+                offset=chunk_index,
+            )
+            async with aclosing(chunks):
+                async for chunk in chunks:
+                    return bytes(chunk)
+            return b""
+
+        try:
+            return await asyncio.wait_for(
+                read_one(), timeout=TELEGRAM_TRANSFER_STALL_TIMEOUT
+            )
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "Telegram 连续 "
+                f"{TELEGRAM_TRANSFER_STALL_TIMEOUT:g} 秒未返回媒体数据，"
+                "已停止本次下载；临时文件已保留，可稍后继续"
+            ) from exc
+
     async def _perform_download_message(
         self,
         *,
@@ -820,6 +868,7 @@ class DownloaderService:
             "speed": 0.0,
             "last_sample_at": time.monotonic(),
             "last_sample_bytes": start_size,
+            "transfer_limit": self._transfer_gate.current_limit,
         }
         async with self._active_lock:
             self._active[record_id] = active
@@ -842,6 +891,7 @@ class DownloaderService:
                 active["speed"] = max(0.0, delta / elapsed)
             active["last_sample_at"] = now
             active["last_sample_bytes"] = downloaded
+            active["transfer_limit"] = self._transfer_gate.current_limit
             self.database.update_download(record_id, downloaded_size=downloaded)
             last_update = now
 
@@ -852,17 +902,33 @@ class DownloaderService:
                 raise RuntimeError("媒体文件标识缺失，无法下载")
             decoded_file_id = FileId.decode(str(file_id))
             with partial.open("ab") as file:
-                async for chunk in client.get_file(
-                    decoded_file_id,
-                    file_size=total_size,
-                    offset=start_size // DOWNLOAD_CHUNK_SIZE,
-                ):
+                chunk_index = start_size // DOWNLOAD_CHUNK_SIZE
+                chunk_total = (
+                    (total_size + DOWNLOAD_CHUNK_SIZE - 1) // DOWNLOAD_CHUNK_SIZE
+                    if total_size > 0
+                    else None
+                )
+                while chunk_total is None or chunk_index < chunk_total:
+                    async with self._transfer_gate.slot():
+                        chunk = await self._read_telegram_chunk(
+                            client,
+                            decoded_file_id,
+                            total_size,
+                            chunk_index,
+                        )
+                    if not chunk:
+                        break
+                    if len(chunk) > DOWNLOAD_CHUNK_SIZE:
+                        raise RuntimeError("Telegram 返回的数据块超过预期大小")
                     file.write(chunk)
                     file.flush()
                     downloaded += len(chunk)
+                    chunk_index += 1
                     if total_size > 0 and downloaded > total_size:
                         raise RuntimeError("Telegram 返回的数据超过预期文件大小")
                     update_progress()
+                    if len(chunk) < DOWNLOAD_CHUNK_SIZE:
+                        break
 
             update_progress(force=True)
             completed_size = file_size(partial)

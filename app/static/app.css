@@ -275,6 +275,7 @@ code { padding: 2px 6px; border-radius: 6px; background: rgba(0, 0, 0, 0.05); co
 .tag-warning { border-color: rgba(255, 149, 0, .17); background: var(--warning-soft); color: var(--warning); }
 .tag-failed { border-color: rgba(255, 59, 48, .15); background: var(--danger-soft); color: var(--danger); }
 .tag-downloading { border-color: rgba(0, 113, 227, .14); background: var(--primary-soft); color: var(--primary); }
+.tag-waiting { border-color: rgba(255, 149, 0, .2); background: rgba(255, 149, 0, .1); color: #b35c00; }
 .progress { height: 6px; overflow: hidden; border-radius: 999px; background: #e8e8ed; }
 .progress span { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width .3s ease; }
 .inline-progress { display: inline-block; width: 80px; height: 5px; margin-right: 8px; overflow: hidden; vertical-align: middle; border-radius: 999px; background: #e8e8ed; }

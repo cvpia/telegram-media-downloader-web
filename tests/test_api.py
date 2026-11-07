@@ -297,6 +297,7 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert "history-type-badge" in dashboard.text
     assert "${TMD.escape(item.media_type)}</span>" not in dashboard.text
     assert "displayFileName" in dashboard.text
+    assert "等待 Telegram" in dashboard.text
 
     forwarding = client.get("/forwarding")
     assert forwarding.status_code == 200, forwarding.text

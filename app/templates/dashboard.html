@@ -167,11 +167,13 @@ function renderActive(active) {
   document.getElementById('tab-active-count').textContent = active.length;
   list.innerHTML = active.length ? active.map((item) => {
     const percent = Math.min(100, Number(item.percent) || 0);
+    const waiting = item.status === 'waiting';
+    const statusText = waiting ? '等待 Telegram' : `下载中 ${percent.toFixed(0)}%`;
     return `<article class="download-card">
       <div class="download-card-head">
         ${mediaTypeIconHtml(item.media_type)}
         <div class="download-title"><strong>${TMD.escape(item.file_name)}</strong><small>${TMD.escape(item.chat)} · 消息 #${item.message_id}</small></div>
-        <span class="tag tag-downloading">下载中 ${percent.toFixed(0)}%</span>
+        <span class="tag ${waiting ? 'tag-waiting' : 'tag-downloading'}">${statusText}</span>
       </div>
       <div class="download-progress"><span style="width:${percent}%"></span></div>
       <div class="download-metrics">
