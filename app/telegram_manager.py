@@ -6,6 +6,7 @@ import asyncio
 import logging
 import secrets
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -255,6 +256,17 @@ class TelegramManager:
 
     @staticmethod
     def _dialog_info(peer: Any, users: dict, chats: dict) -> dict[str, Any] | None:
+        def avatar_fields(photo: Any, peer_id: str) -> dict[str, Any]:
+            photo_id = getattr(photo, "photo_id", None)
+            return {
+                "has_photo": photo_id is not None,
+                "avatar_url": (
+                    f"/api/telegram/dialogs/{peer_id}/avatar?v={photo_id}"
+                    if photo_id is not None
+                    else ""
+                ),
+            }
+
         if isinstance(peer, raw.types.PeerUser):
             user = users.get(peer.user_id)
             if user is None:
@@ -262,31 +274,37 @@ class TelegramManager:
             title = " ".join(
                 part for part in (user.first_name, user.last_name) if part
             ) or user.username or f"User {user.id}"
+            peer_id = str(utils.get_peer_id(peer))
             return {
-                "id": str(utils.get_peer_id(peer)),
+                "id": peer_id,
                 "title": title,
                 "type": "bot" if getattr(user, "bot", False) else "private",
                 "username": user.username or "",
+                **avatar_fields(getattr(user, "photo", None), peer_id),
             }
         if isinstance(peer, raw.types.PeerChat):
             chat = chats.get(peer.chat_id)
             if chat is None:
                 return None
+            peer_id = str(utils.get_peer_id(peer))
             return {
-                "id": str(utils.get_peer_id(peer)),
+                "id": peer_id,
                 "title": chat.title or f"Chat {chat.id}",
                 "type": "group",
                 "username": "",
+                **avatar_fields(getattr(chat, "photo", None), peer_id),
             }
         if isinstance(peer, raw.types.PeerChannel):
             chat = chats.get(peer.channel_id)
             if chat is None:
                 return None
+            peer_id = str(utils.get_peer_id(peer))
             return {
-                "id": str(utils.get_peer_id(peer)),
+                "id": peer_id,
                 "title": chat.title or f"Channel {chat.id}",
                 "type": "supergroup" if getattr(chat, "megagroup", False) else "channel",
                 "username": getattr(chat, "username", "") or "",
+                **avatar_fields(getattr(chat, "photo", None), peer_id),
             }
         return None
 
@@ -376,6 +394,102 @@ class TelegramManager:
             )
         )
         return dialogs
+
+    async def get_dialog_avatar(self, dialog_id: str) -> tuple[bytes, str] | None:
+        client = await self.get_client()
+        chat = await client.get_chat(dialog_id, force_full=False)
+        photo = getattr(chat, "photo", None)
+        if photo is None:
+            return None
+        file_id = getattr(photo, "small_file_id", None) or getattr(
+            photo, "big_file_id", None
+        )
+        if not file_id:
+            return None
+        downloaded = await client.download_media(file_id, in_memory=True)
+        if downloaded is None:
+            return None
+        try:
+            data = (
+                downloaded.getvalue()
+                if hasattr(downloaded, "getvalue")
+                else downloaded.read()
+            )
+            name = (getattr(downloaded, "name", "") or "").lower()
+        finally:
+            close = getattr(downloaded, "close", None)
+            if close is not None:
+                close()
+        if not data:
+            return None
+        media_type = "image/png" if name.endswith(".png") else "image/jpeg"
+        return bytes(data), media_type
+
+    @staticmethod
+    def _message_info(message: Any) -> dict[str, Any]:
+        user = getattr(message, "from_user", None)
+        sender_chat = getattr(message, "sender_chat", None)
+        sender = ""
+        if user is not None:
+            sender = " ".join(
+                part
+                for part in (
+                    getattr(user, "first_name", ""),
+                    getattr(user, "last_name", ""),
+                )
+                if part
+            ) or getattr(user, "username", "") or str(getattr(user, "id", ""))
+        elif sender_chat is not None:
+            sender = getattr(sender_chat, "title", "") or ""
+
+        media = getattr(message, "media", None)
+        media_type = getattr(media, "value", "") if media is not None else ""
+        media_labels = {
+            "photo": "图片",
+            "video": "视频",
+            "document": "文件",
+            "audio": "音频",
+            "voice": "语音",
+            "video_note": "视频消息",
+            "animation": "GIF / 动画",
+            "sticker": "贴纸",
+        }
+        text = getattr(message, "text", "") or getattr(message, "caption", "") or ""
+        media_name = ""
+        if media_type and media_type != "photo":
+            content = getattr(message, media_type, None)
+            media_name = getattr(content, "file_name", "") or ""
+        if not text:
+            text = f"[{media_labels.get(media_type, '媒体' if media_type else '消息')}]"
+
+        date = getattr(message, "date", None)
+        if isinstance(date, datetime):
+            message_date = date.isoformat()
+        elif isinstance(date, int):
+            message_date = utils.timestamp_to_datetime(date).isoformat()
+        else:
+            message_date = ""
+
+        return {
+            "id": int(getattr(message, "id", 0)),
+            "date": message_date,
+            "sender": sender,
+            "text": text,
+            "media_type": media_type,
+            "media_label": media_labels.get(media_type, ""),
+            "media_name": media_name,
+        }
+
+    async def list_dialog_messages(
+        self, dialog_id: str, limit: int = 30
+    ) -> list[dict[str, Any]]:
+        client = await self.get_client()
+        message_limit = max(1, min(int(limit), 100))
+        messages: list[dict[str, Any]] = []
+        async for message in client.get_chat_history(dialog_id, limit=message_limit):
+            messages.append(self._message_info(message))
+        messages.reverse()
+        return messages
 
     async def logout(self) -> None:
         async with self._lock:

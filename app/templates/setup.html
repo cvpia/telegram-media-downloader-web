@@ -14,15 +14,13 @@
     <li data-progress="3"><span>3</span>API 凭据</li>
     <li data-progress="4"><span>4</span>Telegram 登录</li>
     <li data-progress="5"><span>5</span>下载设置</li>
-    <li data-progress="6"><span>6</span>添加频道</li>
   </ol>
 
   <div class="setup-card"
        data-proxy="{{ 'true' if proxy_step_completed else 'false' }}"
        data-admin="{{ 'true' if admin_configured else 'false' }}"
        data-api="{{ 'true' if api_configured else 'false' }}"
-       data-telegram="{{ 'true' if telegram_connected else 'false' }}"
-       data-chats="{{ 'true' if chats_configured else 'false' }}">
+       data-telegram="{{ 'true' if telegram_connected else 'false' }}">
     <section class="wizard-step" data-step="1">
       <div class="step-heading"><span class="step-number">01</span><div><h2>设置网络代理</h2><p>必须先通过网络测试。填写代理会测试代理连通性；不填写则可测试直连。代理凭据会加密保存。</p></div></div>
       <form id="proxy-form" class="stack-form narrow-form">
@@ -80,7 +78,7 @@
     </section>
 
     <section class="wizard-step" data-step="5">
-      <div class="step-heading"><span class="step-number">05</span><div><h2>下载偏好</h2><p>这些设置以后都可以在“系统设置”中修改。</p></div></div>
+      <div class="step-heading"><span class="step-number">05</span><div><h2>下载偏好</h2><p>这些设置以后都可以在“系统设置”中修改。保存后前往频道管理添加下载来源。</p></div></div>
       <form id="preferences-form" class="stack-form">
         <label><span>保存目录</span><input id="download-dir" type="text" required></label>
         <fieldset><legend>媒体类型</legend><div class="check-grid" id="media-type-grid"></div></fieldset>
@@ -94,25 +92,11 @@
           <label><span>文档格式</span><input id="formats-document" type="text" value="all"></label>
           <label><span>视频格式</span><input id="formats-video" type="text" value="all"></label>
         </div>
-        <div class="button-row"><button class="button button-ghost" type="button" id="preferences-back">上一步</button><button class="button button-primary" type="submit">保存并继续</button></div>
+        <div class="button-row"><button class="button button-ghost" type="button" id="preferences-back">上一步</button><button class="button button-primary" type="submit">保存并前往频道管理</button></div>
         <p class="form-error" data-error hidden></p>
       </form>
     </section>
 
-    <section class="wizard-step" data-step="6">
-      <div class="step-heading"><span class="step-number">06</span><div><h2>添加下载频道</h2><p>可以填写 @username、频道 ID 或从已加入会话中选择。</p></div></div>
-      <div class="setup-chat-layout">
-        <form id="chat-form" class="stack-form">
-          <label><span>频道 / 群组</span><input id="chat-ref" type="text" list="dialog-options" placeholder="@channel 或 -1001234567890" required><datalist id="dialog-options"></datalist></label>
-          <label><span>显示名称（可选）</span><input id="chat-title" type="text" placeholder="自动获取"></label>
-          <div class="form-grid"><label><span>开始日期（可选）</span><input id="date-from" type="date"></label><label><span>结束日期（可选）</span><input id="date-to" type="date"></label></div>
-          <div class="button-row"><button class="button button-ghost" type="button" id="load-dialogs">读取我的会话</button><button class="button button-primary" type="submit">添加频道</button></div>
-          <p class="form-error" data-error hidden></p>
-        </form>
-        <div class="mini-list" id="setup-chat-list"><p class="muted">尚未添加频道</p></div>
-      </div>
-      <div class="wizard-finish"><button class="button button-primary button-large" id="finish-setup" type="button" disabled>完成配置，进入下载中心</button></div>
-    </section>
   </div>
 </section>
 {% endblock %}
@@ -386,58 +370,11 @@ document.getElementById('preferences-form').addEventListener('submit', async (ev
         video: parseFormats(document.getElementById('formats-video').value)
       }
     }});
-    showStep(6);
-    await refreshChats();
+    TMD.toast('下载设置已保存，正在前往频道管理', 'success');
+    window.location.href = '/chats';
   } catch (err) { setError(form, err.message); }
 });
 document.getElementById('preferences-back').addEventListener('click', () => showStep(4));
-
-async function refreshChats() {
-  const chats = await TMD.api('/api/chats');
-  const list = document.getElementById('setup-chat-list');
-  if (!chats.length) {
-    list.innerHTML = '<p class="muted">尚未添加频道</p>';
-  } else {
-    list.innerHTML = chats.map((chat) => `<div class="mini-list-item"><div><strong>${TMD.escape(chat.title || chat.chat_ref)}</strong><small>${TMD.escape(chat.chat_ref)}</small></div><button class="icon-button" data-delete-chat="${chat.id}" title="删除">×</button></div>`).join('');
-  }
-  document.getElementById('finish-setup').disabled = chats.length === 0;
-}
-document.getElementById('load-dialogs').addEventListener('click', async (event) => {
-  event.currentTarget.disabled = true;
-  try {
-    const dialogs = await TMD.api('/api/telegram/dialogs');
-    document.getElementById('dialog-options').innerHTML = dialogs.map((dialog) =>
-      `<option value="${TMD.escape(dialog.username ? '@' + dialog.username : dialog.id)}">${TMD.escape(dialog.title)}</option>`
-    ).join('');
-    TMD.toast(`已读取 ${dialogs.length} 个会话`, 'success');
-  } catch (err) { TMD.toast(err.message, 'error'); }
-  finally { event.currentTarget.disabled = false; }
-});
-document.getElementById('chat-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  setError(form, '');
-  try {
-    await TMD.api('/api/chats', { method: 'POST', body: {
-      chat_ref: document.getElementById('chat-ref').value,
-      title: document.getElementById('chat-title').value,
-      date_from: document.getElementById('date-from').value || null,
-      date_to: document.getElementById('date-to').value || null
-    }});
-    form.reset();
-    await refreshChats();
-    TMD.toast('频道已添加', 'success');
-  } catch (err) { setError(form, err.message); }
-});
-document.getElementById('setup-chat-list').addEventListener('click', async (event) => {
-  const button = event.target.closest('[data-delete-chat]');
-  if (!button) return;
-  try {
-    await TMD.api(`/api/chats/${button.dataset.deleteChat}`, { method: 'DELETE' });
-    await refreshChats();
-  } catch (err) { TMD.toast(err.message, 'error'); }
-});
-document.getElementById('finish-setup').addEventListener('click', () => window.location.href = '/');
 document.getElementById('api-hash').required = initial.api !== 'true';
 if (initial.api === 'true') {
   document.getElementById('api-hash').placeholder = '已配置，留空则不修改';
@@ -445,9 +382,6 @@ if (initial.api === 'true') {
 showStep(currentStep);
 if (initial.admin === 'true') {
   loadSettings().catch((err) => TMD.toast(err.message, 'error'));
-}
-if (initial.proxy === 'true' && initial.admin === 'true') {
-  refreshChats().catch(() => {});
 }
 </script>
 {% endblock %}

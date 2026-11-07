@@ -27,6 +27,9 @@ def test_setup_page_renders_version_and_csrf(client: TestClient):
     assert "一次配置，直接开始下载" in response.text
     assert "设置网络代理" in response.text
     assert '<li data-progress="1"><span>1</span>网络代理</li>' in response.text
+    assert 'data-progress="6"' not in response.text
+    assert '添加下载频道' not in response.text
+    assert '保存并前往频道管理' in response.text
     assert '测试代理并继续' in response.text
     assert 'id="api-hash"' in response.text
     assert 'id="bot-token"' in response.text
@@ -209,6 +212,9 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert "频道管理" in chats_page.text
     assert "账号频道与会话" in chats_page.text
     assert "添加所选频道" in chats_page.text
+    assert "点击频道即可查看最近消息" in chats_page.text
+    assert 'id="dialog-preview"' in chats_page.text
+    assert "加载最近的 30 条消息" in chats_page.text
     assert token
 
 def test_proxy_is_first_setup_step_and_can_be_skipped(client: TestClient):
@@ -310,3 +316,42 @@ def test_bulk_chat_creation(client: TestClient):
     payload = response.json()
     assert payload["count"] == 2
     assert len(client.get("/api/chats").json()) == 2
+
+
+def test_telegram_dialog_messages_and_avatar_api(client: TestClient, monkeypatch):
+    initialize_admin(client)
+    telegram = client.app.state.services.telegram
+
+    async def fake_messages(dialog_id, limit):
+        assert dialog_id == "-1001234567890"
+        assert limit == 12
+        return [
+            {
+                "id": 9,
+                "date": "2026-11-07T12:30:00+00:00",
+                "sender": "Example",
+                "text": "Hello channel",
+                "media_type": "",
+                "media_label": "",
+                "media_name": "",
+            }
+        ]
+
+    async def fake_avatar(dialog_id):
+        assert dialog_id == "-1001234567890"
+        return b"\x89PNG\r\n\x1a\n", "image/png"
+
+    monkeypatch.setattr(telegram, "list_dialog_messages", fake_messages)
+    monkeypatch.setattr(telegram, "get_dialog_avatar", fake_avatar)
+
+    response = client.get(
+        "/api/telegram/dialogs/-1001234567890/messages?limit=12"
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()[0]["text"] == "Hello channel"
+
+    response = client.get("/api/telegram/dialogs/-1001234567890/avatar")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "private, max-age=86400"
+    assert response.content.startswith(b"\x89PNG")

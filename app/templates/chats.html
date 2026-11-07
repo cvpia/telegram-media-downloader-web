@@ -2,7 +2,7 @@
 {% block title %}频道管理 · {{ app_name }}{% endblock %}
 {% block content %}
 <section class="content-heading">
-  <div><div class="eyebrow">SOURCES</div><h1>频道管理</h1><p class="muted">自动读取当前 Telegram 账号的频道和群组，搜索后勾选即可批量添加。</p></div>
+  <div><div class="eyebrow">SOURCES</div><h1>频道管理</h1><p class="muted">自动读取当前 Telegram 账号的频道和群组，点击查看最近消息，勾选即可批量添加。</p></div>
   <a class="button button-primary" href="/">返回下载中心</a>
 </section>
 
@@ -12,19 +12,44 @@
 
 <section class="panel dialogs-panel">
   <div class="panel-heading">
-    <div><h2>账号频道与会话</h2><p class="muted">进入页面后自动从 Telegram 账号读取</p></div>
+    <div><h2>账号频道与会话</h2><p class="muted">点击频道即可查看最近消息；勾选后可批量添加为下载来源</p></div>
     <button class="button button-ghost button-small" id="refresh-dialogs" type="button">刷新列表</button>
   </div>
-  <div class="dialog-toolbar">
-    <label class="search-field"><span class="sr-only">搜索频道</span><input id="dialog-search" type="search" placeholder="搜索频道、群组或用户名…" autocomplete="off"></label>
-    <span class="tag" id="dialog-count">等待读取</span>
-  </div>
-  <div id="dialog-list" class="dialog-list" aria-live="polite">
-    <p class="empty-state">正在读取账号会话…</p>
-  </div>
-  <div class="selection-bar" id="selection-bar" hidden>
-    <span>已选择 <strong id="selected-count">0</strong> 个会话</span>
-    <button class="button button-primary" id="add-selected" type="button">添加所选频道</button>
+  <div class="dialog-workspace">
+    <div class="dialog-list-pane">
+      <div class="dialog-toolbar">
+        <label class="search-field"><span class="sr-only">搜索频道</span><input id="dialog-search" type="search" placeholder="搜索频道、群组或用户名…" autocomplete="off"></label>
+        <span class="tag" id="dialog-count">等待读取</span>
+      </div>
+      <div id="dialog-list" class="dialog-list" aria-live="polite">
+        <p class="empty-state">正在读取账号会话…</p>
+      </div>
+      <div class="selection-bar" id="selection-bar" hidden>
+        <span>已选择 <strong id="selected-count">0</strong> 个会话</span>
+        <button class="button button-primary" id="add-selected" type="button">添加所选频道</button>
+      </div>
+    </div>
+    <aside class="dialog-preview" id="dialog-preview" aria-live="polite">
+      <div class="dialog-preview-empty" id="dialog-preview-empty">
+        <span class="preview-mark" aria-hidden="true">◌</span>
+        <h3>选择一个频道</h3>
+        <p>点击左侧频道或群组，加载最近的 30 条消息。</p>
+      </div>
+      <div id="dialog-preview-content" hidden>
+        <header class="dialog-preview-heading">
+          <span class="chat-avatar" id="preview-avatar" aria-hidden="true">
+            <span class="avatar-fallback" id="preview-avatar-fallback">频</span>
+            <img id="preview-avatar-image" alt="" hidden>
+          </span>
+          <div class="dialog-preview-title">
+            <h3 id="preview-title"></h3>
+            <p id="preview-meta"></p>
+          </div>
+          <button class="icon-button" id="close-dialog-preview" type="button" title="关闭消息预览">×</button>
+        </header>
+        <div id="dialog-messages" class="message-list"></div>
+      </div>
+    </aside>
   </div>
 </section>
 
@@ -54,6 +79,8 @@ const initialChats = {{ chats | tojson }};
 const telegramConnected = {{ 'true' if telegram_connected else 'false' }};
 let allDialogs = [];
 let configuredRefs = new Set();
+let activeDialogId = null;
+let messageRequestId = 0;
 
 function dialogRef(dialog) {
   return dialog.username ? `@${dialog.username}` : String(dialog.id);
@@ -69,6 +96,17 @@ function typeLabel(type) {
   })[type] || '会话';
 }
 
+function avatarFallback(title) {
+  return Array.from((title || '#').trim())[0]?.toUpperCase() || '#';
+}
+
+function avatarMarkup(dialog) {
+  const image = dialog.avatar_url
+    ? `<img src="${TMD.escape(dialog.avatar_url)}" alt="" loading="lazy" onerror="this.remove()">`
+    : '';
+  return `<span class="chat-avatar" aria-hidden="true"><span class="avatar-fallback">${TMD.escape(avatarFallback(dialog.title))}</span>${image}</span>`;
+}
+
 function updateConfiguredRefs(chats) {
   configuredRefs = new Set(chats.map((chat) => chat.chat_ref));
 }
@@ -77,7 +115,7 @@ function renderDialogs() {
   const list = document.getElementById('dialog-list');
   const query = document.getElementById('dialog-search').value.trim().toLowerCase();
   const filtered = allDialogs.filter((dialog) =>
-    !query || dialog.title.toLowerCase().includes(query) || dialog.username.toLowerCase().includes(query) || String(dialog.id).includes(query)
+    !query || dialog.title.toLowerCase().includes(query) || (dialog.username || '').toLowerCase().includes(query) || String(dialog.id).includes(query)
   );
   document.getElementById('dialog-count').textContent = query ? `${filtered.length} / ${allDialogs.length}` : `${allDialogs.length} 个会话`;
   if (!filtered.length) {
@@ -88,11 +126,15 @@ function renderDialogs() {
   list.innerHTML = filtered.map((dialog) => {
     const ref = dialogRef(dialog);
     const added = configuredRefs.has(ref);
-    return `<label class="dialog-row ${added ? 'is-added' : ''}" data-type="${TMD.escape(dialog.type)}">
-      <input type="checkbox" value="${TMD.escape(ref)}" ${added ? 'disabled' : ''}>
-      <span class="dialog-main"><strong>${TMD.escape(dialog.title)}</strong><small>${TMD.escape(ref)} · ID ${TMD.escape(dialog.id)}</small></span>
+    const active = dialog.id === activeDialogId;
+    return `<div class="dialog-row ${added ? 'is-added' : ''} ${active ? 'is-active' : ''}" data-dialog-id="${TMD.escape(dialog.id)}" data-type="${TMD.escape(dialog.type)}">
+      <input type="checkbox" value="${TMD.escape(ref)}" aria-label="选择 ${TMD.escape(dialog.title)}" ${added ? 'disabled' : ''}>
+      <button class="dialog-open" type="button" data-open-dialog="${TMD.escape(dialog.id)}" title="查看 ${TMD.escape(dialog.title)} 的消息">
+        ${avatarMarkup(dialog)}
+        <span class="dialog-main"><strong>${TMD.escape(dialog.title)}</strong><small>${TMD.escape(ref)} · ID ${TMD.escape(dialog.id)}</small></span>
+      </button>
       <span class="tag">${added ? '已添加' : TMD.escape(typeLabel(dialog.type))}</span>
-    </label>`;
+    </div>`;
   }).join('');
   updateSelection();
 }
@@ -120,6 +162,83 @@ async function refreshChats() {
   renderChats(chats);
 }
 
+function setPreviewAvatar(dialog) {
+  const fallback = document.getElementById('preview-avatar-fallback');
+  const image = document.getElementById('preview-avatar-image');
+  fallback.textContent = avatarFallback(dialog.title);
+  image.onerror = () => { image.hidden = true; image.removeAttribute('src'); };
+  if (dialog.avatar_url) {
+    image.hidden = false;
+    image.src = dialog.avatar_url;
+  } else {
+    image.hidden = true;
+    image.removeAttribute('src');
+  }
+}
+
+function formatMessageDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+  });
+}
+
+function renderMessages(messages) {
+  const container = document.getElementById('dialog-messages');
+  if (!messages.length) {
+    container.innerHTML = '<p class="empty-state">这个会话暂时没有可显示的消息</p>';
+    return;
+  }
+  container.innerHTML = messages.map((message) => {
+    const media = message.media_label
+      ? `<span class="tag tag-downloading">${TMD.escape(message.media_label)}</span>`
+      : '';
+    const mediaName = message.media_name
+      ? `<span class="message-media-name">${TMD.escape(message.media_name)}</span>`
+      : '';
+    return `<article class="message-item">
+      <header><strong>${TMD.escape(message.sender || '匿名用户')}</strong><time datetime="${TMD.escape(message.date)}">${TMD.escape(formatMessageDate(message.date))}</time></header>
+      <p>${TMD.escape(message.text)}</p>
+      ${media || mediaName ? `<footer>${media}${mediaName}</footer>` : ''}
+    </article>`;
+  }).join('');
+  requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
+}
+
+async function loadDialogMessages(dialog) {
+  activeDialogId = dialog.id;
+  document.querySelectorAll('#dialog-list .dialog-row').forEach((row) => {
+    row.classList.toggle('is-active', row.dataset.dialogId === dialog.id);
+  });
+  document.getElementById('dialog-preview-empty').hidden = true;
+  document.getElementById('dialog-preview-content').hidden = false;
+  document.getElementById('preview-title').textContent = dialog.title;
+  document.getElementById('preview-meta').textContent = `${dialogRef(dialog)} · ${typeLabel(dialog.type)}`;
+  setPreviewAvatar(dialog);
+  const container = document.getElementById('dialog-messages');
+  container.innerHTML = '<p class="empty-state">正在加载最近消息…</p>';
+  const requestId = ++messageRequestId;
+  try {
+    const messages = await TMD.api(`/api/telegram/dialogs/${encodeURIComponent(dialog.id)}/messages?limit=30`);
+    if (requestId !== messageRequestId) return;
+    renderMessages(messages);
+  } catch (err) {
+    if (requestId !== messageRequestId) return;
+    container.innerHTML = `<p class="empty-state">消息加载失败：${TMD.escape(err.message)}</p>`;
+    TMD.toast(err.message, 'error');
+  }
+}
+
+function closeDialogPreview() {
+  activeDialogId = null;
+  messageRequestId += 1;
+  document.querySelectorAll('#dialog-list .dialog-row.is-active').forEach((row) => row.classList.remove('is-active'));
+  document.getElementById('dialog-preview-empty').hidden = false;
+  document.getElementById('dialog-preview-content').hidden = true;
+}
+
 async function loadDialogs() {
   if (!telegramConnected) return;
   const button = document.getElementById('refresh-dialogs');
@@ -145,6 +264,13 @@ async function loadDialogs() {
 document.getElementById('refresh-dialogs').addEventListener('click', loadDialogs);
 document.getElementById('dialog-search').addEventListener('input', renderDialogs);
 document.getElementById('dialog-list').addEventListener('change', updateSelection);
+document.getElementById('dialog-list').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-open-dialog]');
+  if (!button) return;
+  const dialog = allDialogs.find((item) => item.id === button.dataset.openDialog);
+  if (dialog) loadDialogMessages(dialog);
+});
+document.getElementById('close-dialog-preview').addEventListener('click', closeDialogPreview);
 document.getElementById('add-selected').addEventListener('click', async (event) => {
   const button = event.currentTarget;
   const refs = [...document.querySelectorAll('#dialog-list input[type="checkbox"]:checked:not(:disabled)')].map((input) => input.value);

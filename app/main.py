@@ -18,7 +18,13 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -346,6 +352,42 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @app.get(
+        "/api/telegram/dialogs/{dialog_id}/avatar",
+        dependencies=[Depends(require_admin)],
+    )
+    async def telegram_dialog_avatar(dialog_id: str, request: Request) -> Response:
+        try:
+            avatar = await service_container(request).telegram.get_dialog_avatar(
+                dialog_id
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if avatar is None:
+            raise HTTPException(status_code=404, detail="该会话没有可用头像")
+        data, media_type = avatar
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
+
+    @app.get(
+        "/api/telegram/dialogs/{dialog_id}/messages",
+        dependencies=[Depends(require_admin)],
+    )
+    async def telegram_dialog_messages(
+        dialog_id: str,
+        request: Request,
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        try:
+            return await service_container(request).telegram.list_dialog_messages(
+                dialog_id, limit
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.post(
         "/api/telegram/logout",
         dependencies=[Depends(require_admin), Depends(csrf_header)],
@@ -511,7 +553,6 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
                 admin_configured=services.settings.admin_configured,
                 api_configured=services.settings.api_configured,
                 telegram_connected=services.settings.telegram_connected,
-                chats_configured=bool(services.database.list_chats()),
             ),
         )
 
