@@ -5,14 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 from pyrogram import Client
-from pyrogram.session.internals.msg_id import MsgId
 from pyrogram.errors import (
     BadMsgNotification,
     FloodWait,
@@ -72,16 +70,8 @@ class TelegramManager:
             proxy["password"] = unquote(parsed.password)
         return proxy
 
-    @staticmethod
-    def initialize_msg_id_clock() -> None:
-        """Use Unix time for the first request before Telegram syncs server time."""
-        if MsgId.server_time == 0:
-            MsgId.reference_clock = time.perf_counter() - time.time()
-            MsgId.last_time = 0
-            MsgId.msg_id_offset = 0
 
     def _new_client(self, name: str, api_id: int, api_hash: str) -> Client:
-        self.initialize_msg_id_clock()
         return Client(
             name,
             api_id=api_id,

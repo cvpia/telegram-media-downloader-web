@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.0.5
+
+- 切换为原项目使用的 `tangyoha/pyrogram` patch 分支 2.1.22。
+- MTProto API Layer 升级到 184，修复 `UPDATE_APP_TO_LOGIN`。
+- 使用新版 Pyrogram 的 Unix 时间 `msg_id` 实现，修复首次登录错误。
+
 ## 3.0.4
 
 - 修复 Pyrogram 首条消息使用错误参考时钟导致的 `msg_id too low`。

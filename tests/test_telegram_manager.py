@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-import time
 
 import pytest
 from pyrogram.errors import BadMsgNotification
-from pyrogram.session.internals.msg_id import MsgId
 
 from app.telegram_manager import TelegramManager
 
@@ -30,17 +28,6 @@ class FakeClient:
             raise BadMsgNotification(16)
         return SimpleNamespace(phone_code_hash="phone-hash", type="app")
 
-
-def test_first_msg_id_uses_unix_time(monkeypatch):
-    monkeypatch.setattr(MsgId, "server_time", 0)
-    monkeypatch.setattr(MsgId, "reference_clock", 0)
-    monkeypatch.setattr(MsgId, "last_time", 0)
-    monkeypatch.setattr(MsgId, "msg_id_offset", 0)
-
-    TelegramManager.initialize_msg_id_clock()
-    first_msg_seconds = MsgId() / (2 ** 32)
-
-    assert abs(first_msg_seconds - time.time()) < 2
 
 
 def test_clock_sync_codes_are_detected():
