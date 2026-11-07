@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -192,6 +193,59 @@ async def test_channel_filter_skips_non_matching_media(tmp_path: Path, monkeypat
     await service._download_chat(chat)
 
     assert last_messages == [(1, 10)]
+
+
+@pytest.mark.asyncio
+async def test_download_slot_applies_changed_concurrency_limit(tmp_path: Path, monkeypatch):
+    current_limit = {"value": 1}
+    active = 0
+    max_active = 0
+    started = []
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_download(**kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        started.append(kwargs["message"].id)
+        first_started.set()
+        if len(started) >= 2:
+            second_started.set()
+        await release.wait()
+        active -= 1
+        return True
+
+    settings = SimpleNamespace(max_concurrent_downloads=lambda: current_limit["value"])
+    service = DownloaderService(SimpleNamespace(), settings, SimpleNamespace())
+    monkeypatch.setattr(service, "_perform_download_message", fake_download)
+
+    async def run(message_id):
+        return await service._download_message(
+            message=SimpleNamespace(id=message_id),
+            media=SimpleNamespace(),
+            media_type="video",
+            file_name=f"{message_id}.mp4",
+            chat_id=1,
+            chat_title="Concurrent",
+        )
+
+    tasks = [asyncio.create_task(run(1)), asyncio.create_task(run(2))]
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    await asyncio.sleep(0.05)
+    assert started == [1]
+    assert max_active == 1
+
+    current_limit["value"] = 2
+    await service.refresh_concurrency_limit()
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+    assert sorted(started) == [1, 2]
+    assert max_active == 2
+
+    release.set()
+    assert await asyncio.gather(*tasks) == [True, True]
+    assert service._download_slots_in_use == 0
 
 
 @pytest.mark.asyncio

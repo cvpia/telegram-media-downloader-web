@@ -74,9 +74,20 @@ def test_admin_setup_login_and_logout(client: TestClient):
     assert client.get("/api/settings").status_code == 200
 
 
-def test_settings_update_encrypts_secrets(client: TestClient, tmp_path):
+def test_settings_update_encrypts_secrets(client: TestClient, tmp_path, monkeypatch):
     token = initialize_admin(client)
     download_dir = tmp_path / "custom-downloads"
+    refresh_calls = 0
+
+    async def fake_refresh_concurrency_limit():
+        nonlocal refresh_calls
+        refresh_calls += 1
+
+    monkeypatch.setattr(
+        client.app.state.services.downloader,
+        "refresh_concurrency_limit",
+        fake_refresh_concurrency_limit,
+    )
     response = client.put(
         "/api/settings",
         json={
@@ -101,6 +112,7 @@ def test_settings_update_encrypts_secrets(client: TestClient, tmp_path):
     assert payload["bot_token_configured"] is True
     assert payload["media_types"] == ["photo", "video"]
     assert download_dir.exists()
+    assert refresh_calls == 1
 
     raw_api_hash = client.app.state.services.database.get_setting("api_hash")
     raw_bot_token = client.app.state.services.database.get_setting("bot_token")

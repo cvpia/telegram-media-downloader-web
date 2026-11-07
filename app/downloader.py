@@ -8,6 +8,7 @@ import mimetypes
 import re
 import shutil
 import time
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -170,6 +171,8 @@ class DownloaderService:
         self._task: asyncio.Task[None] | None = None
         self._active: dict[int, dict[str, Any]] = {}
         self._active_lock = asyncio.Lock()
+        self._concurrency_condition = asyncio.Condition()
+        self._download_slots_in_use = 0
         self._direct_tasks: set[asyncio.Task[None]] = set()
 
     @staticmethod
@@ -317,15 +320,31 @@ class DownloaderService:
             await asyncio.gather(*self._direct_tasks, return_exceptions=True)
         await self.stop()
 
+    async def refresh_concurrency_limit(self) -> None:
+        async with self._concurrency_condition:
+            self._concurrency_condition.notify_all()
+
+    @asynccontextmanager
+    async def _download_slot(self):
+        limit = max(1, min(int(self.settings.max_concurrent_downloads()), 10))
+        async with self._concurrency_condition:
+            while self._download_slots_in_use >= limit:
+                await self._concurrency_condition.wait()
+                limit = max(1, min(int(self.settings.max_concurrent_downloads()), 10))
+            self._download_slots_in_use += 1
+        try:
+            yield
+        finally:
+            async with self._concurrency_condition:
+                self._download_slots_in_use = max(0, self._download_slots_in_use - 1)
+                self._concurrency_condition.notify_all()
+
     async def _run(self) -> None:
         try:
-            max_concurrent = self.settings.max_concurrent_downloads()
-            semaphore = asyncio.Semaphore(max_concurrent)
             chats = [chat for chat in self.database.list_chats() if chat["enabled"]]
 
             async def run_chat(chat: dict[str, Any]) -> None:
-                async with semaphore:
-                    await self._download_chat(chat)
+                await self._download_chat(chat)
 
             await asyncio.gather(*(run_chat(chat) for chat in chats))
             if self.state != "stopped":
@@ -507,6 +526,28 @@ class DownloaderService:
             self.database.set_last_message(chat["id"], message.id)
 
     async def _download_message(
+        self,
+        *,
+        message: Any,
+        media: Any,
+        media_type: str,
+        file_name: str | None,
+        chat_id: int,
+        chat_title: str,
+        destination_override: Path | None = None,
+    ) -> bool:
+        async with self._download_slot():
+            return await self._perform_download_message(
+                message=message,
+                media=media,
+                media_type=media_type,
+                file_name=file_name,
+                chat_id=chat_id,
+                chat_title=chat_title,
+                destination_override=destination_override,
+            )
+
+    async def _perform_download_message(
         self,
         *,
         message: Any,

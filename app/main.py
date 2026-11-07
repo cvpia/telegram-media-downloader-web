@@ -297,7 +297,10 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         payload: SettingsUpdate,
         request: Request,
     ) -> dict[str, Any]:
-        return service_container(request).settings.update(payload)
+        services = service_container(request)
+        result = services.settings.update(payload)
+        await services.downloader.refresh_concurrency_limit()
+        return result
 
     @app.get("/api/settings/export.yaml", dependencies=[Depends(require_admin)])
     async def export_settings(request: Request) -> PlainTextResponse:
@@ -321,7 +324,9 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=413, detail="YAML 文件不能超过 1MB")
         try:
             content = raw.decode("utf-8-sig")
-            count = service_container(request).settings.import_yaml(content)
+            services = service_container(request)
+            count = services.settings.import_yaml(content)
+            await services.downloader.refresh_concurrency_limit()
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"导入失败: {exc}") from exc
         return {"ok": True, "chats_imported": count}
