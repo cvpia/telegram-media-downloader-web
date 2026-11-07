@@ -520,8 +520,6 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             return RedirectResponse("/setup", status_code=303)
         if not request.session.get("authenticated"):
             return RedirectResponse("/login", status_code=303)
-        if not services.settings.ready:
-            return RedirectResponse("/setup", status_code=303)
         downloader = services.downloader
         return templates.TemplateResponse(
             request=request,
@@ -539,10 +537,11 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
     @app.get("/setup", response_class=HTMLResponse)
     async def setup_page(request: Request):
         services = service_container(request)
-        if services.settings.ready:
-            return RedirectResponse("/", status_code=303)
+        edit_mode = request.query_params.get("edit") == "1"
         if services.settings.admin_configured and not request.session.get("authenticated"):
             return RedirectResponse("/login", status_code=303)
+        if services.settings.ready and not edit_mode:
+            return RedirectResponse("/", status_code=303)
         return templates.TemplateResponse(
             request=request,
             name="setup.html",

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}下载中心 · {{ app_name }}{% endblock %}
+{% block title %}下载监控 · {{ app_name }}{% endblock %}
 {% block content %}
 <section class="content-heading">
-  <div><div class="eyebrow">DASHBOARD</div><h1>下载中心</h1><p class="muted">查看 Telegram 媒体下载状态、进度和历史记录。</p></div>
+  <div><div class="eyebrow">DOWNLOAD MONITOR</div><h1>下载监控</h1><p class="muted">实时查看下载速度、任务进度、队列状态和存储空间。</p></div>
   <div class="button-row" id="download-controls">
     <button class="button button-primary" data-action="start">开始下载</button>
     <button class="button button-ghost" data-action="pause">暂停</button>
@@ -14,15 +14,53 @@
 {% if not ready %}
 <div class="notice notice-warning">
   <strong>配置尚未完成。</strong>
-  请先完成 Telegram 登录并至少添加一个频道。 <a href="/setup">继续配置</a>
+  请先完成 Telegram 登录并至少添加一个频道。 <a href="/setup?edit=1">继续配置</a>
 </div>
 {% endif %}
 
-<section class="stats-grid">
-  <article class="stat-card"><span>服务状态</span><strong class="state-value" id="stat-state">待机</strong><small id="stat-current">—</small></article>
-  <article class="stat-card"><span>已配置频道</span><strong id="stat-chats">0</strong><small>启用中的下载来源</small></article>
-  <article class="stat-card"><span>Telegram</span><strong id="stat-telegram">{{ '已连接' if telegram_connected else '未登录' }}</strong><small>本地会话登录</small></article>
-  <article class="stat-card"><span>最近完成</span><strong id="stat-completed">0</strong><small>当前显示的历史记录</small></article>
+<section class="monitor-grid">
+  <article class="monitor-hero panel">
+    <div class="monitor-topline">
+      <span class="live-dot">实时活动</span>
+      <span id="last-updated">等待服务器数据</span>
+    </div>
+    <div class="monitor-headline">
+      <div class="monitor-speed">
+        <span>当前总下载速度</span>
+        <strong id="stat-speed">0 B/s</strong>
+        <p id="stat-current">下载服务处于待机状态</p>
+      </div>
+      <div class="progress-ring" id="overall-ring" style="--value: 0">
+        <strong id="stat-overall">0%</strong>
+        <span>总进度</span>
+      </div>
+    </div>
+    <div class="monitor-progress" aria-label="当前总下载进度"><span id="overall-progress-bar"></span></div>
+    <div class="monitor-metrics">
+      <div><span>活动任务</span><strong id="stat-active">0</strong></div>
+      <div><span>已下载流量</span><strong id="stat-downloaded">0 B</strong></div>
+      <div><span>剩余时间</span><strong id="stat-eta">—</strong></div>
+      <div><span>最近完成</span><strong id="stat-completed">0</strong></div>
+    </div>
+  </article>
+
+  <aside class="monitor-side">
+    <article class="panel system-card">
+      <div class="panel-heading"><div><h2>服务状态</h2><p class="muted">Telegram 与下载引擎</p></div><span class="live-dot">LIVE</span></div>
+      <div class="system-row"><span>下载服务</span><strong class="state-value" id="stat-state">待机</strong></div>
+      <div class="system-row"><span>Telegram</span><strong class="connection-value {{ 'is-online' if telegram_connected else '' }}" id="stat-telegram">{{ '已连接' if telegram_connected else '未登录' }}</strong></div>
+      <div class="system-row"><span>启用来源</span><strong id="stat-chats">0</strong></div>
+    </article>
+    <article class="panel resource-card">
+      <div class="panel-heading"><div><h2>存储资源</h2><p class="muted">下载目录所在磁盘</p></div><span class="resource-icon" aria-hidden="true">⌂</span></div>
+      <div class="resource-progress"><span id="disk-progress-bar"></span></div>
+      <div class="resource-stats">
+        <span>可用 <strong id="disk-free">—</strong></span>
+        <span>已用 <strong id="disk-percent">—</strong></span>
+      </div>
+      <p class="resource-path" id="resource-dir">—</p>
+    </article>
+  </aside>
 </section>
 
 {% if status.last_error %}
@@ -31,17 +69,18 @@
 <div class="notice notice-error" id="last-error" hidden><strong>最近错误：</strong><span></span></div>
 {% endif %}
 
-<section class="panel-grid">
-  <article class="panel">
-    <div class="panel-heading"><div><h2>正在下载</h2><p class="muted">由服务器实时推送</p></div><span class="live-dot">LIVE</span></div>
-    <div id="active-list" class="task-list"><p class="empty-state">暂无正在进行的任务</p></div>
+<section class="monitor-workspace">
+  <article class="panel active-panel">
+    <div class="panel-heading"><div><h2>正在下载</h2><p class="muted">速度、进度和剩余时间每秒更新</p></div><span class="live-dot">LIVE</span></div>
+    <div id="active-list" class="download-list"><p class="empty-state">暂无正在进行的任务</p></div>
   </article>
-  <article class="panel">
-    <div class="panel-heading"><div><h2>下载来源</h2><p class="muted">已添加的频道和群组</p></div><a class="text-link" href="/chats">管理频道</a></div>
-    <div id="chat-list" class="task-list">
+
+  <article class="panel source-panel">
+    <div class="panel-heading"><div><h2>下载来源</h2><p class="muted">已配置的频道与群组</p></div><a class="text-link" href="/chats">管理频道</a></div>
+    <div id="source-list" class="source-list">
       {% if chats %}
         {% for chat in chats %}
-        <div class="task-row"><div><strong>{{ chat.title or chat.chat_ref }}</strong><small>{{ chat.chat_ref }} · 进度消息 #{{ chat.last_message_id }}</small></div><span class="tag {{ 'tag-success' if chat.enabled else '' }}">{{ '启用' if chat.enabled else '停用' }}</span></div>
+        <div class="source-row"><span class="source-indicator {{ 'active' if chat.enabled else '' }}"></span><div><strong>{{ chat.title or chat.chat_ref }}</strong><small>{{ chat.chat_ref }} · 消息 #{{ chat.last_message_id }}</small></div><span class="tag {{ 'tag-success' if chat.enabled else '' }}">{{ '启用' if chat.enabled else '停用' }}</span></div>
         {% endfor %}
       {% else %}
         <p class="empty-state">尚未添加频道</p>
@@ -50,7 +89,7 @@
   </article>
 </section>
 
-<section class="panel">
+<section class="panel history-panel">
   <div class="panel-heading"><div><h2>下载记录</h2><p class="muted">最近 50 条任务</p></div></div>
   <div class="table-wrap">
     <table class="data-table">
@@ -69,6 +108,8 @@
 {% block scripts %}
 <script>
 const stateLabels = { stopped: '待机', running: '运行中', paused: '已暂停', completed: '已完成', error: '异常' };
+const historyLabels = { downloading: '下载中', completed: '已完成', failed: '失败', skipped: '已跳过' };
+const mediaIcons = { audio: '♪', document: '≡', photo: '◉', video: '▶', voice: '◌', video_note: '▶', animation: '✦' };
 
 function formatBytes(value) {
   const number = Number(value || 0);
@@ -78,24 +119,98 @@ function formatBytes(value) {
   return `${(number / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
+function formatSpeed(value) {
+  return `${formatBytes(value)}/s`;
+}
+
+function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined) return '—';
+  const value = Math.max(0, Number(seconds));
+  if (!Number.isFinite(value)) return '—';
+  if (value < 60) return `${Math.round(value)} 秒`;
+  if (value < 3600) return `${Math.floor(value / 60)} 分 ${Math.round(value % 60)} 秒`;
+  return `${Math.floor(value / 3600)} 小时 ${Math.floor((value % 3600) / 60)} 分`;
+}
+
 function progressPercent(item) {
-  if (!item.total) return item.status === 'completed' ? 100 : 0;
-  return Math.min(100, Math.round(item.downloaded_size / item.total * 100));
+  if (item.percent !== undefined) return Math.min(100, Number(item.percent) || 0);
+  if (!item.total_size) return item.status === 'completed' ? 100 : 0;
+  return Math.min(100, Math.round(item.downloaded_size / item.total_size * 100));
+}
+
+function renderActive(active) {
+  const list = document.getElementById('active-list');
+  list.innerHTML = active.length ? active.map((item) => {
+    const percent = Math.min(100, Number(item.percent) || 0);
+    return `<article class="download-card">
+      <div class="download-card-head">
+        <span class="media-icon" data-media="${TMD.escape(item.media_type || 'document')}">${mediaIcons[item.media_type] || '↓'}</span>
+        <div class="download-title"><strong>${TMD.escape(item.file_name)}</strong><small>${TMD.escape(item.chat)} · 消息 #${item.message_id}</small></div>
+        <span class="tag tag-downloading">下载中 ${percent.toFixed(0)}%</span>
+      </div>
+      <div class="download-progress"><span style="width:${percent}%"></span></div>
+      <div class="download-metrics">
+        <span><small>速度</small><strong>${formatSpeed(item.speed)}</strong></span>
+        <span><small>已下载</small><strong>${formatBytes(item.downloaded)} / ${formatBytes(item.total)}</strong></span>
+        <span><small>剩余时间</small><strong>${formatDuration(item.eta_seconds)}</strong></span>
+        <span><small>进度</small><strong>${percent.toFixed(1)}%</strong></span>
+      </div>
+    </article>`;
+  }).join('') : '<p class="empty-state">暂无正在进行的任务</p>';
+}
+
+function renderSources(chats) {
+  const list = document.getElementById('source-list');
+  if (!chats || !chats.length) {
+    list.innerHTML = '<p class="empty-state">尚未添加频道</p>';
+    return;
+  }
+  list.innerHTML = chats.map((chat) => `<div class="source-row">
+    <span class="source-indicator ${chat.enabled ? 'active' : ''}"></span>
+    <div><strong>${TMD.escape(chat.title || chat.chat_ref)}</strong><small>${TMD.escape(chat.chat_ref)} · 消息 #${chat.last_message_id}</small></div>
+    <span class="tag ${chat.enabled ? 'tag-success' : ''}">${chat.enabled ? '启用' : '停用'}</span>
+  </div>`).join('');
+}
+
+function renderHistory(recent) {
+  const rows = (recent || []).map((item) => `<tr>
+    <td><span class="tag tag-${TMD.escape(item.status)}">${TMD.escape(historyLabels[item.status] || item.status)}</span></td>
+    <td>${TMD.escape(item.chat_title)}</td>
+    <td class="file-cell" title="${TMD.escape(item.file_name)}">${TMD.escape(item.file_name)}</td>
+    <td>${TMD.escape(item.media_type)}</td>
+    <td><div class="inline-progress"><span style="width:${progressPercent(item)}%"></span></div><small>${formatBytes(item.downloaded_size)} / ${formatBytes(item.total_size)}</small></td>
+    <td>${TMD.escape(item.started_at)}</td>
+  </tr>`).join('');
+  document.getElementById('history-body').innerHTML = rows || '<tr><td colspan="6" class="empty-state">暂无下载记录</td></tr>';
 }
 
 function renderStatus(data) {
   const state = document.getElementById('stat-state');
   state.textContent = stateLabels[data.state] || data.state;
   state.dataset.state = data.state;
-  document.getElementById('stat-current').textContent = data.current_chat || (data.state === 'completed' ? '全部任务完成' : '—');
-  document.getElementById('stat-chats').textContent = (data.chats || []).filter((chat) => chat.enabled).length;
-  document.getElementById('stat-completed').textContent = (data.recent || []).filter((item) => item.status === 'completed').length;
+  document.getElementById('stat-current').textContent = data.current_chat || (data.state === 'running' ? '正在扫描下载来源' : data.state === 'completed' ? '本轮任务已全部完成' : '下载服务处于待机状态');
 
   const active = data.active || [];
-  document.getElementById('active-list').innerHTML = active.length ? active.map((item) => {
-    const percent = item.total ? Math.round(item.downloaded / item.total * 100) : 0;
-    return `<div class="task-row task-row-stack"><div class="task-line"><div><strong>${TMD.escape(item.file_name)}</strong><small>${TMD.escape(item.chat)} · 消息 #${item.message_id}</small></div><span>${formatBytes(item.downloaded)} / ${formatBytes(item.total)}</span></div><div class="progress"><span style="width:${percent}%"></span></div></div>`;
-  }).join('') : '<p class="empty-state">暂无正在进行的任务</p>';
+  const chats = data.chats || [];
+  const summary = data.summary || {};
+  const percent = Math.min(100, Number(summary.percent) || 0);
+  document.getElementById('stat-speed').textContent = formatSpeed(summary.total_speed);
+  document.getElementById('stat-active').textContent = summary.active_count ?? active.length;
+  document.getElementById('stat-downloaded').textContent = formatBytes(summary.total_downloaded);
+  document.getElementById('stat-eta').textContent = formatDuration(summary.eta_seconds);
+  document.getElementById('stat-chats').textContent = summary.enabled_count ?? chats.filter((chat) => chat.enabled).length;
+  document.getElementById('stat-completed').textContent = (data.recent || []).filter((item) => item.status === 'completed').length;
+  document.getElementById('stat-overall').textContent = `${percent.toFixed(0)}%`;
+  document.getElementById('overall-ring').style.setProperty('--value', percent);
+  document.getElementById('overall-progress-bar').style.width = `${percent}%`;
+  document.getElementById('last-updated').textContent = `更新于 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+
+  const resource = data.resource || {};
+  const diskPercent = Number(resource.disk_percent) || 0;
+  document.getElementById('disk-progress-bar').style.width = `${Math.min(100, diskPercent)}%`;
+  document.getElementById('disk-free').textContent = formatBytes(resource.disk_free);
+  document.getElementById('disk-percent').textContent = `${diskPercent.toFixed(1)}%`;
+  document.getElementById('resource-dir').textContent = resource.download_dir || '—';
 
   const error = document.getElementById('last-error');
   if (data.last_error) {
@@ -105,8 +220,9 @@ function renderStatus(data) {
     error.hidden = true;
   }
 
-  const rows = (data.recent || []).map((item) => `<tr><td><span class="tag tag-${TMD.escape(item.status)}">${TMD.escape(item.status)}</span></td><td>${TMD.escape(item.chat_title)}</td><td class="file-cell" title="${TMD.escape(item.file_name)}">${TMD.escape(item.file_name)}</td><td>${TMD.escape(item.media_type)}</td><td><div class="inline-progress"><span style="width:${progressPercent(item)}%"></span></div><small>${formatBytes(item.downloaded_size)} / ${formatBytes(item.total_size)}</small></td><td>${TMD.escape(item.started_at)}</td></tr>`).join('');
-  document.getElementById('history-body').innerHTML = rows || '<tr><td colspan="6" class="empty-state">暂无下载记录</td></tr>';
+  renderActive(active);
+  renderSources(chats);
+  renderHistory(data.recent);
 }
 
 document.querySelectorAll('[data-action]').forEach((button) => {
@@ -122,15 +238,17 @@ document.querySelectorAll('[data-action]').forEach((button) => {
 });
 
 let source = null;
+let reconnectTimer = null;
 function connectEvents() {
   if (source) source.close();
+  clearTimeout(reconnectTimer);
   source = new EventSource('/api/events');
   source.onmessage = (event) => {
     try { renderStatus(JSON.parse(event.data)); } catch (_) {}
   };
   source.onerror = () => {
     source.close();
-    setTimeout(connectEvents, 3000);
+    reconnectTimer = setTimeout(connectEvents, 3000);
   };
 }
 TMD.api('/api/downloads/status').then(renderStatus).catch((err) => TMD.toast(err.message, 'error'));

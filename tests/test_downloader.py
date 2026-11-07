@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 from app.downloader import (
+    DownloaderService,
     build_destination,
     detect_media,
     format_is_allowed,
@@ -87,3 +89,48 @@ def test_parse_proxy_url():
         "username": "user",
         "password": "pass",
     }
+
+def test_downloader_snapshot_reports_speed_progress_and_disk(tmp_path: Path):
+    settings = SimpleNamespace(download_dir=lambda: tmp_path)
+    database = SimpleNamespace(
+        recent_downloads=lambda limit: [],
+        list_chats=lambda: [
+            {"id": 1, "enabled": True},
+            {"id": 2, "enabled": False},
+        ],
+    )
+    service = DownloaderService(database, settings, telegram=None)
+    now = time.monotonic()
+    service._active[1] = {
+        "record_id": 1,
+        "chat": "Demo",
+        "message_id": 10,
+        "file_name": "demo.mp4",
+        "media_type": "video",
+        "downloaded": 5 * 1024 * 1024,
+        "total": 10 * 1024 * 1024,
+        "status": "downloading",
+        "started_at": time.time(),
+        "speed": 1024 * 1024,
+        "last_sample_at": now,
+    }
+
+    snapshot = service.snapshot()
+
+    assert snapshot["summary"] == {
+        "active_count": 1,
+        "configured_count": 2,
+        "enabled_count": 1,
+        "total_speed": 1048576.0,
+        "total_downloaded": 5 * 1024 * 1024,
+        "total_size": 10 * 1024 * 1024,
+        "remaining": 5 * 1024 * 1024,
+        "percent": 50.0,
+        "eta_seconds": 5,
+    }
+    assert snapshot["active"][0]["percent"] == 50.0
+    assert snapshot["active"][0]["speed"] == 1048576.0
+    assert snapshot["active"][0]["eta_seconds"] == 5
+    assert snapshot["resource"]["download_dir"] == str(tmp_path)
+    assert snapshot["resource"]["disk_total"] > 0
+    assert 0 <= snapshot["resource"]["disk_percent"] <= 100

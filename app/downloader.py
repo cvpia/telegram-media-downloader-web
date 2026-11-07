@@ -6,6 +6,7 @@ import asyncio
 import logging
 import mimetypes
 import re
+import shutil
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -152,15 +153,90 @@ class DownloaderService:
         self._active: dict[int, dict[str, Any]] = {}
         self._active_lock = asyncio.Lock()
 
+    @staticmethod
+    def _active_snapshot(item: dict[str, Any], now: float | None = None) -> dict[str, Any]:
+        now = time.monotonic() if now is None else now
+        item = dict(item)
+        total = max(0, int(item.get("total") or 0))
+        downloaded = max(0, int(item.get("downloaded") or 0))
+        if total:
+            downloaded = min(downloaded, total)
+        speed = max(0.0, float(item.get("speed") or 0))
+        sample_at = float(item.get("last_sample_at") or now)
+        if now - sample_at > 3:
+            speed = 0.0
+        remaining = max(0, total - downloaded)
+        item.update(
+            {
+                "percent": round(downloaded / total * 100, 1) if total else 0.0,
+                "speed": round(speed, 1),
+                "remaining": remaining,
+                "eta_seconds": (
+                    round(remaining / speed) if speed > 0 and remaining else None
+                ),
+            }
+        )
+        return item
+
+    def _resource_snapshot(self) -> dict[str, Any]:
+        download_dir = self.settings.download_dir()
+        resource: dict[str, Any] = {
+            "download_dir": str(download_dir),
+            "disk_total": 0,
+            "disk_used": 0,
+            "disk_free": 0,
+            "disk_percent": 0.0,
+        }
+        try:
+            usage = shutil.disk_usage(download_dir)
+        except OSError:
+            return resource
+        resource.update(
+            {
+                "disk_total": usage.total,
+                "disk_used": usage.used,
+                "disk_free": usage.free,
+                "disk_percent": round(usage.used / usage.total * 100, 1)
+                if usage.total
+                else 0.0,
+            }
+        )
+        return resource
+
     def snapshot(self) -> dict[str, Any]:
         recent = self.database.recent_downloads(50)
+        chats = self.database.list_chats()
+        now = time.monotonic()
+        active = [self._active_snapshot(item, now) for item in self._active.values()]
+        total_downloaded = sum(int(item.get("downloaded") or 0) for item in active)
+        total_size = sum(int(item.get("total") or 0) for item in active)
+        total_speed = sum(float(item.get("speed") or 0) for item in active)
+        remaining = sum(int(item.get("remaining") or 0) for item in active)
         return {
             "state": self.state,
             "current_chat": self.current_chat,
             "last_error": self.last_error,
-            "active": list(self._active.values()),
+            "active": active,
             "recent": recent,
-            "chats": self.database.list_chats(),
+            "chats": chats,
+            "summary": {
+                "active_count": len(active),
+                "configured_count": len(chats),
+                "enabled_count": sum(bool(chat.get("enabled")) for chat in chats),
+                "total_speed": round(total_speed, 1),
+                "total_downloaded": total_downloaded,
+                "total_size": total_size,
+                "remaining": remaining,
+                "percent": round(total_downloaded / total_size * 100, 1)
+                if total_size
+                else 0.0,
+                "eta_seconds": (
+                    round(remaining / total_speed)
+                    if total_speed > 0 and remaining
+                    else None
+                ),
+            },
+            "resource": self._resource_snapshot(),
         }
 
     async def start(self) -> dict[str, Any]:
@@ -331,10 +407,15 @@ class DownloaderService:
             "chat": chat_title,
             "message_id": message.id,
             "file_name": destination.name,
+            "media_type": media_type,
             "downloaded": 0,
             "total": total_size,
             "status": "downloading",
             "started_at": time.time(),
+            "updated_at": time.time(),
+            "speed": 0.0,
+            "last_sample_at": time.monotonic(),
+            "last_sample_bytes": 0,
         }
         async with self._active_lock:
             self._active[record_id] = active
@@ -346,7 +427,14 @@ class DownloaderService:
             now = time.monotonic()
             active["downloaded"] = int(current)
             active["total"] = int(total or total_size)
+            active["updated_at"] = time.time()
             if now - last_update >= 0.5:
+                elapsed = now - float(active["last_sample_at"])
+                delta = int(current) - int(active["last_sample_bytes"])
+                if elapsed > 0:
+                    active["speed"] = max(0.0, delta / elapsed)
+                active["last_sample_at"] = now
+                active["last_sample_bytes"] = int(current)
                 self.database.update_download(record_id, downloaded_size=int(current))
                 last_update = now
 

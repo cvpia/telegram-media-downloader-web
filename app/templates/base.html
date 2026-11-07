@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="light">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
@@ -12,15 +12,18 @@
   {% if authenticated %}
   <header class="topbar">
     <a class="brand" href="/">
-      <span class="brand-mark">TM</span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false"><path d="M12 4v13m0 0 5-5m-5 5-5-5"></path></svg>
+      </span>
       <span>
         <strong>{{ app_name }}</strong>
         <small>Telegram 媒体下载管理台</small>
       </span>
     </a>
     <nav class="main-nav" aria-label="主导航">
-      <a href="/" class="{{ 'active' if page == 'dashboard' else '' }}">下载中心</a>
+      <a href="/" class="{{ 'active' if page == 'dashboard' else '' }}">下载监控</a>
       <a href="/chats" class="{{ 'active' if page == 'chats' else '' }}">频道管理</a>
+      <a href="/setup?edit=1" class="{{ 'active' if page == 'setup' else '' }}">配置向导</a>
       <a href="/settings" class="{{ 'active' if page == 'settings' else '' }}">系统设置</a>
     </nav>
     <button class="button button-ghost button-small" id="logout-button" type="button">退出登录</button>

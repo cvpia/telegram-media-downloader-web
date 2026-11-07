@@ -3,7 +3,7 @@
 {% block content %}
 <section class="content-heading">
   <div><div class="eyebrow">SOURCES</div><h1>频道管理</h1><p class="muted">自动读取当前 Telegram 账号的频道和群组，点击查看最近消息，勾选即可批量添加。</p></div>
-  <a class="button button-primary" href="/">返回下载中心</a>
+  <a class="button button-primary" href="/">返回下载监控</a>
 </section>
 
 {% if not telegram_connected %}
@@ -13,16 +13,17 @@
 <section class="panel dialogs-panel">
   <div class="panel-heading">
     <div><h2>账号频道与会话</h2><p class="muted">点击频道即可查看最近消息；勾选后可批量添加为下载来源</p></div>
-    <button class="button button-ghost button-small" id="refresh-dialogs" type="button">刷新列表</button>
+    <button class="button button-ghost button-small" id="refresh-dialogs" type="button">同步更新</button>
   </div>
   <div class="dialog-workspace">
     <div class="dialog-list-pane">
       <div class="dialog-toolbar">
         <label class="search-field"><span class="sr-only">搜索频道</span><input id="dialog-search" type="search" placeholder="搜索频道、群组或用户名…" autocomplete="off"></label>
-        <span class="tag" id="dialog-count">等待读取</span>
+        <span class="tag" id="dialog-count">暂无缓存</span>
+        <span class="sync-state" id="sync-state">等待同步</span>
       </div>
       <div id="dialog-list" class="dialog-list" aria-live="polite">
-        <p class="empty-state">正在读取账号会话…</p>
+        <p class="empty-state">暂无本地缓存，正在后台同步…</p>
       </div>
       <div class="selection-bar" id="selection-bar" hidden>
         <span>已选择 <strong id="selected-count">0</strong> 个会话</span>
@@ -68,7 +69,7 @@
     </details>
   </article>
   <article class="panel">
-    <div class="panel-heading"><div><h2>已配置来源</h2><p class="muted">下载进度消息 ID 会自动保存</p></div><a class="text-link" href="/">下载中心</a></div>
+    <div class="panel-heading"><div><h2>已配置来源</h2><p class="muted">下载进度消息 ID 会自动保存</p></div><a class="text-link" href="/">下载监控</a></div>
     <div id="chat-table" class="task-list"></div>
   </article>
 </section>
@@ -77,10 +78,50 @@
 <script>
 const initialChats = {{ chats | tojson }};
 const telegramConnected = {{ 'true' if telegram_connected else 'false' }};
+const DIALOG_CACHE_KEY = 'tmd:dialogs:v2';
 let allDialogs = [];
 let configuredRefs = new Set();
 let activeDialogId = null;
 let messageRequestId = 0;
+let syncInProgress = false;
+
+function readDialogCache() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(DIALOG_CACHE_KEY) || 'null');
+    const dialogs = Array.isArray(cached?.dialogs)
+      ? cached.dialogs.filter((dialog) => dialog && dialog.id && dialog.title)
+      : [];
+    return { dialogs, cachedAt: Number(cached?.cachedAt || 0) };
+  } catch (_) {
+    return { dialogs: [], cachedAt: 0 };
+  }
+}
+
+function writeDialogCache(dialogs) {
+  try {
+    localStorage.setItem(DIALOG_CACHE_KEY, JSON.stringify({ cachedAt: Date.now(), dialogs }));
+  } catch (_) {}
+}
+
+function formatCacheTime(timestamp) {
+  if (!timestamp) return '本地缓存';
+  const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
+  if (minutes < 1) return '刚刚缓存';
+  if (minutes < 60) return `${minutes} 分钟前缓存`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} 小时前缓存`;
+  return `${Math.round(hours / 24)} 天前缓存`;
+}
+
+function setSyncState(text, state = 'idle') {
+  const element = document.getElementById('sync-state');
+  element.textContent = text;
+  element.dataset.state = state;
+}
+
+function updateDialogOptions() {
+  document.getElementById('dialog-options').innerHTML = allDialogs.map((dialog) => `<option value="${TMD.escape(dialogRef(dialog))}">${TMD.escape(dialog.title)}</option>`).join('');
+}
 
 function dialogRef(dialog) {
   return dialog.username ? `@${dialog.username}` : String(dialog.id);
@@ -239,29 +280,45 @@ function closeDialogPreview() {
   document.getElementById('dialog-preview-content').hidden = true;
 }
 
-async function loadDialogs() {
-  if (!telegramConnected) return;
+async function loadDialogs({ silent = false } = {}) {
+  if (!telegramConnected || syncInProgress) return;
+  syncInProgress = true;
   const button = document.getElementById('refresh-dialogs');
   const list = document.getElementById('dialog-list');
+  const hasCache = allDialogs.length > 0;
   button.disabled = true;
-  button.textContent = '读取中…';
-  list.innerHTML = '<p class="empty-state">正在读取账号会话，请稍候…</p>';
+  button.textContent = '同步中…';
+  setSyncState(hasCache ? '后台更新中' : '首次同步中', 'syncing');
+  if (!hasCache) {
+    list.innerHTML = '<p class="empty-state">首次同步账号会话，完成后会自动缓存…</p>';
+    document.getElementById('dialog-count').textContent = '同步中';
+  }
   try {
-    allDialogs = await TMD.api('/api/telegram/dialogs');
-    document.getElementById('dialog-options').innerHTML = allDialogs.map((dialog) => `<option value="${TMD.escape(dialogRef(dialog))}">${TMD.escape(dialog.title)}</option>`).join('');
-    TMD.toast(`已自动读取 ${allDialogs.length} 个账号会话`, 'success');
+    const dialogs = await TMD.api('/api/telegram/dialogs');
+    if (!Array.isArray(dialogs)) throw new Error('账号会话数据格式异常');
+    allDialogs = dialogs;
+    writeDialogCache(allDialogs);
+    updateDialogOptions();
     renderDialogs();
+    setSyncState(`已更新 · ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`, 'ready');
+    if (!silent) TMD.toast(`账号会话已更新，共 ${allDialogs.length} 个`, 'success');
   } catch (err) {
-    list.innerHTML = `<p class="empty-state">读取失败：${TMD.escape(err.message)}</p>`;
-    document.getElementById('dialog-count').textContent = '读取失败';
-    TMD.toast(err.message, 'error');
+    if (!hasCache) {
+      list.innerHTML = `<p class="empty-state">同步失败：${TMD.escape(err.message)}</p>`;
+      document.getElementById('dialog-count').textContent = '同步失败';
+    } else {
+      renderDialogs();
+    }
+    setSyncState(hasCache ? '更新失败 · 显示缓存' : '同步失败', 'error');
+    if (!silent || !hasCache) TMD.toast(err.message, 'error');
   } finally {
+    syncInProgress = false;
     button.disabled = false;
-    button.textContent = '刷新列表';
+    button.textContent = '同步更新';
   }
 }
 
-document.getElementById('refresh-dialogs').addEventListener('click', loadDialogs);
+document.getElementById('refresh-dialogs').addEventListener('click', () => loadDialogs());
 document.getElementById('dialog-search').addEventListener('input', renderDialogs);
 document.getElementById('dialog-list').addEventListener('change', updateSelection);
 document.getElementById('dialog-list').addEventListener('click', (event) => {
@@ -320,6 +377,17 @@ document.getElementById('chat-table').addEventListener('click', async (event) =>
 });
 
 renderChats(initialChats);
-if (telegramConnected) loadDialogs();
+const dialogCache = readDialogCache();
+if (dialogCache.dialogs.length) {
+  allDialogs = dialogCache.dialogs;
+  updateDialogOptions();
+  renderDialogs();
+  setSyncState(formatCacheTime(dialogCache.cachedAt), 'cache');
+}
+if (telegramConnected) {
+  loadDialogs({ silent: true });
+} else {
+  setSyncState('Telegram 未登录', 'error');
+}
 </script>
 {% endblock %}

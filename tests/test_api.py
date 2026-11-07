@@ -193,11 +193,15 @@ def test_download_start_requires_telegram_and_chat(client: TestClient):
     )
     assert response.status_code == 422
     assert "Telegram" in response.json()["detail"]
-def test_authenticated_incomplete_setup_redirects_to_wizard(client: TestClient):
+
+
+def test_authenticated_incomplete_setup_can_open_monitor(client: TestClient):
     initialize_admin(client)
-    response = client.get("/", follow_redirects=False)
-    assert response.status_code == 303
-    assert response.headers["location"] == "/setup"
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "下载监控" in response.text
+    assert "配置尚未完成" in response.text
+    assert "当前总下载速度" in response.text
 
 
 def test_static_assets_and_authenticated_pages_render(client: TestClient):
@@ -215,7 +219,33 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert "点击频道即可查看最近消息" in chats_page.text
     assert 'id="dialog-preview"' in chats_page.text
     assert "加载最近的 30 条消息" in chats_page.text
+    assert 'id="sync-state"' in chats_page.text
+    assert "tmd:dialogs:v2" in chats_page.text
+    assert "localStorage" in chats_page.text
+    assert "下载监控" in settings_page.text
+    assert "配置向导" in settings_page.text
+    assert 'href="/setup?edit=1"' in settings_page.text
     assert token
+
+def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypatch):
+    initialize_admin(client)
+    services = client.app.state.services
+    monkeypatch.setattr(type(services.settings), "ready", property(lambda _: True))
+
+    dashboard = client.get("/")
+    assert dashboard.status_code == 200, dashboard.text
+    assert "当前总下载速度" in dashboard.text
+    assert "存储资源" in dashboard.text
+    assert 'id="stat-speed"' in dashboard.text
+    assert 'id="stat-eta"' in dashboard.text
+    assert 'id="disk-free"' in dashboard.text
+    assert "下载监控" in dashboard.text
+
+    setup = client.get("/setup?edit=1")
+    assert setup.status_code == 200, setup.text
+    assert "配置向导" in setup.text
+    assert "下载偏好" in setup.text
+
 
 def test_proxy_is_first_setup_step_and_can_be_skipped(client: TestClient):
     token = get_csrf(client)

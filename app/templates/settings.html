@@ -3,14 +3,14 @@
 {% block content %}
 <section class="content-heading">
   <div><div class="eyebrow">CONFIGURATION</div><h1>系统设置</h1><p class="muted">所有配置在 Web 端生效，敏感凭据会加密保存。</p></div>
-  <a class="button button-primary" href="/">返回下载中心</a>
+  <a class="button button-primary" href="/">返回下载监控</a>
 </section>
 
 <section class="two-column-layout settings-layout">
   <article class="panel">
     <div class="panel-heading"><div><h2>Telegram 连接</h2><p class="muted">当前状态：{{ '已登录' if telegram_connected else '未登录' }}</p></div><span class="tag {{ 'tag-success' if telegram_connected else 'tag-warning' }}">{{ '在线' if telegram_connected else '待配置' }}</span></div>
     <div class="settings-actions">
-      <a class="button button-ghost" href="/setup">重新运行登录向导</a>
+      <a class="button button-ghost" href="/setup?edit=1">重新运行登录向导</a>
       <button class="button button-danger" id="telegram-logout" type="button" {{ '' if telegram_connected else 'disabled' }}>退出 Telegram</button>
     </div>
     <div class="notice notice-info">API Hash、Bot Token 等敏感配置使用本地密钥加密，不会以明文写入数据库。</div>
