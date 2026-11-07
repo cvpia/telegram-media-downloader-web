@@ -170,6 +170,7 @@ async def test_channel_filter_skips_non_matching_media(tmp_path: Path, monkeypat
             return SimpleNamespace(id=-100123, title="Filtered")
 
         async def get_chat_history(self, chat_id, **kwargs):
+            assert kwargs == {"min_id": 0}
             yield message
 
     last_messages = []
@@ -191,6 +192,55 @@ async def test_channel_filter_skips_non_matching_media(tmp_path: Path, monkeypat
     await service._download_chat(chat)
 
     assert last_messages == [(1, 10)]
+
+
+@pytest.mark.asyncio
+async def test_download_chat_processes_new_messages_oldest_first(
+    tmp_path: Path, monkeypatch
+):
+    chat = {
+        "id": 1,
+        "chat_ref": "-100123",
+        "title": "Ordered",
+        "enabled": 1,
+        "last_message_id": 10,
+        "date_from": None,
+        "date_to": None,
+        "download_filter": "",
+    }
+    messages = [
+        SimpleNamespace(id=12, date=datetime(2025, 1, 1, tzinfo=UTC)),
+        SimpleNamespace(id=11, date=datetime(2025, 1, 1, tzinfo=UTC)),
+    ]
+
+    class FakeClient:
+        async def get_chat(self, chat_ref):
+            return SimpleNamespace(id=-100123, title="Ordered")
+
+        async def get_chat_history(self, chat_id, **kwargs):
+            assert kwargs == {"min_id": 10}
+            for message in messages:
+                yield message
+
+    last_messages = []
+    database = SimpleNamespace(
+        update_chat_metadata=lambda *args, **kwargs: None,
+        set_last_message=lambda chat_id, message_id: last_messages.append(
+            (chat_id, message_id)
+        ),
+    )
+    settings = SimpleNamespace(media_types=lambda: ["video"], file_formats=lambda: {})
+    telegram = SimpleNamespace(get_client=lambda: _async_value(FakeClient()))
+    service = DownloaderService(database, settings, telegram)
+    service.state = "running"
+
+    monkeypatch.setattr(
+        "app.downloader.detect_media",
+        lambda message: None,
+    )
+    await service._download_chat(chat)
+
+    assert last_messages == [(1, 11), (1, 12)]
 
 
 async def _async_value(value):

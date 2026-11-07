@@ -450,13 +450,17 @@ class DownloaderService:
         except ValueError as exc:
             raise ValueError(f"频道“{title}”的下载规则无效: {exc}") from exc
 
-        async for message in client.get_chat_history(
-            telegram_chat.id,
-            offset_id=int(chat["last_message_id"]),
-            reverse=True,
-        ):
+        last_message_id = int(chat["last_message_id"])
+        pending_messages = [
+            message
+            async for message in client.get_chat_history(
+                telegram_chat.id,
+                min_id=last_message_id,
+            )
+        ]
+        for message in reversed(pending_messages):
             await self._wait_if_paused()
-            if message.id <= int(chat["last_message_id"]):
+            if message.id <= last_message_id:
                 continue
             message_date = message.date
             if message_date is not None:
