@@ -189,21 +189,34 @@ function mediaActionLabel(mediaType) {
   return '打开';
 }
 
+function displayFileName(value) {
+  const parts = String(value || '').split(/[\\/]/);
+  return parts[parts.length - 1] || String(value || '');
+}
+
 function renderHistory(data) {
   const rows = (data.items || []).map((item) => {
     const canOpen = ['completed', 'skipped'].includes(item.status);
+    const mediaUrl = `/api/downloads/${item.id}/media`;
+    const fileName = displayFileName(item.file_name);
     let action = '—';
     if (canOpen) {
-      const mediaUrl = `/api/downloads/${item.id}/media`;
-      action = ['video', 'video_note', 'animation'].includes(item.media_type)
-        ? `<button class="history-media-link" type="button" data-play-media data-media-url="${mediaUrl}" data-media-title="${TMD.escape(item.file_name)}">播放</button>`
-        : `<a class="history-media-link" href="${mediaUrl}" target="_blank" rel="noopener">${mediaActionLabel(item.media_type)}</a>`;
+      if (['video', 'video_note', 'animation'].includes(item.media_type)) {
+        action = `<button class="history-media-link" type="button" data-play-media data-media-url="${mediaUrl}" data-media-title="${TMD.escape(fileName)}">播放</button>`;
+      } else if (item.media_type === 'photo') {
+        action = `<button class="history-media-link" type="button" data-preview-image data-media-url="${mediaUrl}" data-media-title="${TMD.escape(fileName)}">查看</button>`;
+      } else {
+        action = `<a class="history-media-link" href="${mediaUrl}" target="_blank" rel="noopener">${mediaActionLabel(item.media_type)}</a>`;
+      }
     }
+    const mediaPreview = canOpen && item.media_type === 'photo'
+      ? `<button class="history-thumbnail" type="button" data-preview-image data-media-url="${mediaUrl}" data-media-title="${TMD.escape(fileName)}" aria-label="放大图片：${TMD.escape(fileName)}"><img src="${mediaUrl}" alt="${TMD.escape(fileName)}" loading="lazy" decoding="async"></button>`
+      : '';
     return `<tr>
       <td><span class="tag tag-${TMD.escape(item.status)}">${TMD.escape(historyLabels[item.status] || item.status)}</span></td>
       <td>${TMD.escape(item.chat_title)}</td>
-      <td class="file-cell" title="${TMD.escape(item.file_name)}">${TMD.escape(item.file_name)}</td>
-      <td>${TMD.escape(item.media_type)}</td>
+      <td class="file-cell" title="${TMD.escape(item.file_name)}">${TMD.escape(fileName)}</td>
+      <td><div class="history-media-cell">${mediaPreview}<span>${TMD.escape(item.media_type)}</span></div></td>
       <td><div class="inline-progress"><span style="width:${progressPercent(item)}%"></span></div><small>${formatBytes(item.downloaded_size)} / ${formatBytes(item.total_size)}</small></td>
       <td>${TMD.escape(item.started_at)}</td>
       <td>${action}</td>
@@ -255,9 +268,15 @@ document.getElementById('history-next').addEventListener('click', () => {
   if (historyPage < historyPages) loadHistory(historyPage + 1);
 });
 document.getElementById('history-body').addEventListener('click', (event) => {
-  const button = event.target.closest('[data-play-media]');
-  if (!button) return;
-  TMD.openVideo(button.dataset.mediaUrl, button.dataset.mediaTitle || '视频播放', '已下载视频 · 支持拖动进度');
+  const videoButton = event.target.closest('[data-play-media]');
+  if (videoButton) {
+    TMD.openVideo(videoButton.dataset.mediaUrl, videoButton.dataset.mediaTitle || '视频播放', '已下载视频 · 支持拖动进度');
+    return;
+  }
+  const imageButton = event.target.closest('[data-preview-image]');
+  if (imageButton) {
+    TMD.openImage(imageButton.dataset.mediaUrl, imageButton.dataset.mediaTitle || '图片预览', '已下载图片 · 放大预览');
+  }
 });
 
 function renderStatus(data) {

@@ -263,6 +263,7 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert "typeof player.load === 'function'" in app_js
     assert "typeof player.play === 'function'" in app_js
     assert "openVideo" in app_js
+    assert "openImage" in app_js
     assert 'id="sync-state"' in chats_page.text
     assert "tmd:dialogs:v2" in chats_page.text
     assert "localStorage" in chats_page.text
@@ -287,6 +288,9 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert 'id="history-page-info"' in dashboard.text
     assert "下载监控" in dashboard.text
     assert "data-play-media" in dashboard.text
+    assert "data-preview-image" in dashboard.text
+    assert "history-thumbnail" in dashboard.text
+    assert "displayFileName" in dashboard.text
 
     setup = client.get("/setup?edit=1")
     assert setup.status_code == 200, setup.text
@@ -565,6 +569,9 @@ def test_media_preview_direct_download_and_history_api(
     second_id = services.database.create_download(
         chat["id"], "Media Demo", 2, str(second_file), "video", 9
     )
+    downloading_id = services.database.create_download(
+        chat["id"], "Media Demo", 3, str(first_file), "video", 9
+    )
     services.database.update_download(first_id, status="completed", downloaded_size=9)
     services.database.update_download(second_id, status="completed", downloaded_size=9)
 
@@ -574,6 +581,7 @@ def test_media_preview_direct_download_and_history_api(
     assert payload["total"] == 2
     assert payload["pages"] == 2
     assert len(payload["items"]) == 1
+    assert downloading_id not in [item["id"] for item in payload["items"]]
 
     media = client.get(f"/api/downloads/{first_id}/media")
     assert media.status_code == 200

@@ -338,15 +338,25 @@ class Database:
             ).fetchone()
         return dict(row) if row else None
 
-    def recent_downloads(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    def recent_downloads(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        terminal_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        where = "WHERE status <> 'downloading'" if terminal_only else ""
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM downloads ORDER BY started_at DESC LIMIT ? OFFSET ?",
+                f"SELECT * FROM downloads {where} ORDER BY started_at DESC LIMIT ? OFFSET ?",
                 (limit, max(0, offset)),
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def count_downloads(self) -> int:
+    def count_downloads(self, *, terminal_only: bool = False) -> int:
+        where = " WHERE status <> 'downloading'" if terminal_only else ""
         with self._lock, self._connect() as connection:
-            row = connection.execute("SELECT COUNT(*) AS count FROM downloads").fetchone()
+            row = connection.execute(
+                f"SELECT COUNT(*) AS count FROM downloads{where}"
+            ).fetchone()
         return int(row["count"])

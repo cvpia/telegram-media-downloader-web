@@ -318,8 +318,11 @@ def test_build_group_destination_uses_chat_folder_and_original_name(tmp_path: Pa
 def test_downloader_history_page_uses_offset_and_total(tmp_path: Path):
     calls = []
     database = SimpleNamespace(
-        count_downloads=lambda: 37,
-        recent_downloads=lambda limit, offset=0: calls.append((limit, offset)) or [],
+        count_downloads=lambda **kwargs: 37,
+        recent_downloads=lambda limit, offset=0, **kwargs: calls.append(
+            (limit, offset, kwargs.get("terminal_only"))
+        )
+        or [],
         list_chats=lambda: [],
     )
     settings = SimpleNamespace(download_dir=lambda: tmp_path)
@@ -334,4 +337,4 @@ def test_downloader_history_page_uses_offset_and_total(tmp_path: Path):
         "page_size": 10,
         "pages": 4,
     }
-    assert calls == [(10, 20)]
+    assert calls == [(10, 20, True)]

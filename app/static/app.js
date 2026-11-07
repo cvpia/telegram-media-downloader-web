@@ -63,27 +63,51 @@
     toastTimer = setTimeout(() => element.classList.remove('show'), 3500);
   }
 
-  function resetVideoPlayer() {
+  function resetMediaViewer() {
     const dialog = document.getElementById('video-dialog');
     const player = document.getElementById('video-player');
-    if (!dialog || !player) return;
+    const image = document.getElementById('image-preview');
+    if (!dialog || !player || !image) return;
     if (typeof player.pause === 'function') player.pause();
     if (typeof player.removeAttribute === 'function') player.removeAttribute('src');
     if (typeof player.load === 'function') player.load();
+    image.removeAttribute('src');
+    image.hidden = true;
+    player.hidden = false;
   }
 
-  function openVideo(url, title = '视频播放', subtitle = '在线播放 · 支持拖动进度') {
+  function showMediaDialog(title, subtitle) {
     const dialog = document.getElementById('video-dialog');
-    const player = document.getElementById('video-player');
-    if (!dialog || !player || !url) return;
+    if (!dialog) return false;
     document.getElementById('video-dialog-title').textContent = title;
     document.getElementById('video-dialog-subtitle').textContent = subtitle;
-    player.src = url;
     if (!dialog.open) {
       if (typeof dialog.showModal === 'function') dialog.showModal();
       else dialog.setAttribute('open', '');
     }
+    return true;
+  }
+
+  function openVideo(url, title = '视频播放', subtitle = '在线播放 · 支持拖动进度') {
+    const player = document.getElementById('video-player');
+    const image = document.getElementById('image-preview');
+    if (!player || !image || !url) return;
+    resetMediaViewer();
+    player.src = url;
+    if (!showMediaDialog(title, subtitle)) return;
     if (typeof player.play === 'function') player.play().catch(() => {});
+  }
+
+  function openImage(url, title = '图片预览', subtitle = '点击关闭按钮、遮罩或按 Esc 关闭') {
+    const player = document.getElementById('video-player');
+    const image = document.getElementById('image-preview');
+    if (!player || !image || !url) return;
+    resetMediaViewer();
+    player.hidden = true;
+    image.src = url;
+    image.alt = title;
+    image.hidden = false;
+    showMediaDialog(title, subtitle);
   }
 
   function closeVideo() {
@@ -92,7 +116,7 @@
     if (dialog.open && typeof dialog.close === 'function') dialog.close();
     else {
       dialog.removeAttribute('open');
-      resetVideoPlayer();
+      resetMediaViewer();
     }
   }
 
@@ -102,7 +126,7 @@
     videoDialog.addEventListener('click', (event) => {
       if (event.target === videoDialog) closeVideo();
     });
-    videoDialog.addEventListener('close', resetVideoPlayer);
+    videoDialog.addEventListener('close', resetMediaViewer);
   }
 
   const logout = document.getElementById('logout-button');
@@ -117,5 +141,5 @@
     });
   }
 
-  window.TMD = { api, escape: escapeHtml, toast, openVideo, closeVideo };
+  window.TMD = { api, escape: escapeHtml, toast, openVideo, openImage, closeVideo };
 })();

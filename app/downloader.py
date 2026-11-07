@@ -263,11 +263,13 @@ class DownloaderService:
 
     def history_page(self, page: int = 1, page_size: int = 10) -> dict[str, Any]:
         page_size = max(1, min(int(page_size), 50))
-        total = self.database.count_downloads()
+        total = self.database.count_downloads(terminal_only=True)
         pages = max(1, (total + page_size - 1) // page_size)
         page = max(1, min(int(page), pages))
         items = self.database.recent_downloads(
-            page_size, offset=(page - 1) * page_size
+            page_size,
+            offset=(page - 1) * page_size,
+            terminal_only=True,
         )
         return {
             "items": items,
