@@ -403,7 +403,9 @@ code { padding: 2px 6px; border-radius: 6px; background: rgba(0, 0, 0, 0.05); co
 .history-pagination { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; color: var(--muted); font-size: .76rem; }
 .history-media-link { display: inline-flex; padding: 5px 10px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: .72rem; font-weight: 600; }
 .history-media-link:hover { background: rgba(0, 113, 227, .16); color: var(--primary-hover); }
-.message-media-preview { position: relative; margin: 9px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: #f2f2f5; }
+.message-media-preview { position: relative; display: block; margin: 9px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: #f2f2f5; color: inherit; text-decoration: none; }
+.message-media-play { cursor: pointer; }
+.message-media-play:hover { border-color: rgba(0,113,227,.24); }
 .message-media-preview img, .message-media-preview video { display: block; width: 100%; max-height: 360px; object-fit: contain; background: #f2f2f5; }
 .message-media-open { position: absolute; right: 8px; bottom: 8px; padding: 5px 9px; border-radius: 999px; background: rgba(20,20,24,.72); color: #fff; font-size: .68rem; font-weight: 600; text-decoration: none; backdrop-filter: blur(10px); }
 .message-media-open:hover { background: rgba(20,20,24,.88); color: #fff; }

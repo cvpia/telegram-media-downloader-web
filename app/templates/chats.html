@@ -489,8 +489,8 @@ function renderMessages(messages, { scrollToBottom = true, preserve = null } = {
       const source = TMD.escape(message.preview_url);
       const fullMedia = `/api/telegram/dialogs/${encodeURIComponent(dialogId)}/messages/${message.id}/media`;
       const label = TMD.escape(message.media_name || (message.media_type === 'photo' ? '图片' : '视频'));
-      const mediaLink = `<a class="message-media-open" href="${fullMedia}" target="_blank" rel="noopener">${message.media_type === 'video' ? '播放视频' : '查看原图'}</a>`;
-      preview = `<div class="message-media-preview"><img src="${source}" alt="${label}" loading="lazy" decoding="async" onerror="this.hidden=true">${mediaLink}</div>`;
+      const actionLabel = message.media_type === 'video' ? '播放视频' : '查看原图';
+      preview = `<a class="message-media-preview message-media-play" href="${fullMedia}" target="_blank" rel="noopener" aria-label="${actionLabel}：${label}"><img src="${source}" alt="${label}" loading="lazy" decoding="async" onerror="this.hidden=true"><span class="message-media-open">${actionLabel}</span></a>`;
     }
     const saveButton = message.has_media
       ? `<button class="message-save-button" type="button" data-save-message="${message.id}" data-media-type="${TMD.escape(message.media_type)}">保存到 downloads/群名</button>`

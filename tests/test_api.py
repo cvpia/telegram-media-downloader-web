@@ -242,6 +242,8 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert "data-retry-messages" in chats_page.text
     assert "timeoutMs: 30000" in chats_page.text
     assert "timeoutMs: 15000" in chats_page.text
+    assert "message-media-preview message-media-play" in chats_page.text
+    assert 'target="_blank" rel="noopener" aria-label="${actionLabel}' in chats_page.text
     assert 'id="sync-state"' in chats_page.text
     assert "tmd:dialogs:v2" in chats_page.text
     assert "localStorage" in chats_page.text
