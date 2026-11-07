@@ -290,6 +290,11 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert "data-play-media" in dashboard.text
     assert "data-preview-image" in dashboard.text
     assert "history-thumbnail" in dashboard.text
+    assert "data-lazy-video-thumbnail" in dashboard.text
+    assert "videoThumbnailObserver" in dashboard.text
+    assert "rootMargin: '180px 0px'" in dashboard.text
+    assert "history-type-badge" in dashboard.text
+    assert "${TMD.escape(item.media_type)}</span>" not in dashboard.text
     assert "displayFileName" in dashboard.text
 
     setup = client.get("/setup?edit=1")
@@ -587,3 +592,27 @@ def test_media_preview_direct_download_and_history_api(
     assert media.status_code == 200
     assert media.content == b"video-one"
     assert media.headers["content-type"].startswith("video/mp4")
+
+
+def test_download_record_retry_returns_existing_record(client: TestClient):
+    initialize_admin(client)
+    services = client.app.state.services
+    chat = services.database.upsert_chat("@retry_demo", "Retry Demo")
+
+    first_id = services.database.create_download(
+        chat["id"], "Retry Demo", 77, "/tmp/retry.mp4", "video", 1024
+    )
+    services.database.update_download(first_id, status="failed", error="network")
+    assert [
+        item["id"]
+        for item in services.database.resumable_downloads(chat["id"])
+    ] == [first_id]
+    second_id = services.database.create_download(
+        chat["id"], "Retry Demo", 77, "/tmp/retry.mp4", "video", 1024
+    )
+
+    assert second_id == first_id
+    record = services.database.get_download(second_id)
+    assert record is not None
+    assert record["status"] == "downloading"
+    assert record["error"] is None

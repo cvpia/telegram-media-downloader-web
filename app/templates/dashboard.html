@@ -114,7 +114,26 @@
 <script>
 const stateLabels = { stopped: '待机', running: '运行中', paused: '已暂停', completed: '已完成', error: '异常' };
 const historyLabels = { downloading: '下载中', completed: '已完成', failed: '失败', skipped: '已跳过' };
-const mediaIcons = { audio: '♪', document: '≡', photo: '◉', video: '▶', voice: '◌', video_note: '▶', animation: '✦' };
+const mediaTypeLabels = { audio: '音频', document: '文档', photo: '图片', video: '视频', voice: '语音', video_note: '视频消息', animation: '动画' };
+const mediaIconPaths = {
+  audio: '<path d="M9 18V6l10-2v12"></path><circle cx="6.5" cy="18" r="2.5"></circle><circle cx="16.5" cy="16" r="2.5"></circle>',
+  document: '<path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v5h5M9 13h6M9 17h6"></path>',
+  photo: '<rect x="3.5" y="4.5" width="17" height="15" rx="3"></rect><circle cx="8.5" cy="9.5" r="1.5"></circle><path d="m5 17 4.5-4.5 3.5 3.5 2.2-2.2L19 17"></path>',
+  video: '<path d="M9 7.5v9l7-4.5-7-4.5Z" fill="currentColor" stroke="none"></path>',
+  voice: '<rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"></path>',
+  video_note: '<path d="M9 7.5v9l7-4.5-7-4.5Z" fill="currentColor" stroke="none"></path>',
+  animation: '<path d="m12 3 1.65 4.35L18 9l-4.35 1.65L12 15l-1.65-4.35L6 9l4.35-1.65L12 3Z"></path><path d="m18.5 16 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"></path>'
+};
+
+function mediaTypeIcon(mediaType) {
+  return `<svg class="media-type-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${mediaIconPaths[mediaType] || mediaIconPaths.document}</svg>`;
+}
+
+function mediaTypeIconHtml(mediaType, className = 'media-icon') {
+  const type = mediaIconPaths[mediaType] ? mediaType : 'document';
+  const label = mediaTypeLabels[type] || '文件';
+  return `<span class="${className}" data-media="${TMD.escape(type)}" role="img" aria-label="${label}" title="${label}">${mediaTypeIcon(type)}</span>`;
+}
 
 function formatBytes(value) {
   const number = Number(value || 0);
@@ -150,7 +169,7 @@ function renderActive(active) {
     const percent = Math.min(100, Number(item.percent) || 0);
     return `<article class="download-card">
       <div class="download-card-head">
-        <span class="media-icon" data-media="${TMD.escape(item.media_type || 'document')}">${mediaIcons[item.media_type] || '↓'}</span>
+        ${mediaTypeIconHtml(item.media_type)}
         <div class="download-title"><strong>${TMD.escape(item.file_name)}</strong><small>${TMD.escape(item.chat)} · 消息 #${item.message_id}</small></div>
         <span class="tag tag-downloading">下载中 ${percent.toFixed(0)}%</span>
       </div>
@@ -194,35 +213,81 @@ function displayFileName(value) {
   return parts[parts.length - 1] || String(value || '');
 }
 
+let videoThumbnailObserver = null;
+
+function loadVideoThumbnail(video) {
+  if (!video || video.dataset.thumbnailLoaded === 'true') return;
+  video.dataset.thumbnailLoaded = 'true';
+  video.src = video.dataset.thumbnailSrc || '';
+  if (video.src) video.load();
+}
+
+function observeVideoThumbnails(root = document) {
+  const videos = root.querySelectorAll('video[data-lazy-video-thumbnail]:not([data-thumbnail-loaded])');
+  if (!videos.length) return;
+  if (!('IntersectionObserver' in window)) {
+    videos.forEach(loadVideoThumbnail);
+    return;
+  }
+  if (!videoThumbnailObserver) {
+    videoThumbnailObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        observer.unobserve(entry.target);
+        loadVideoThumbnail(entry.target);
+      });
+    }, { rootMargin: '180px 0px', threshold: 0.01 });
+  }
+  videos.forEach((video) => {
+    video.addEventListener('loadedmetadata', () => {
+      const duration = Number(video.duration);
+      if (!Number.isFinite(duration) || duration <= 0) return;
+      try { video.currentTime = Math.min(0.15, duration / 5); } catch (_) {}
+    }, { once: true });
+    video.addEventListener('loadeddata', () => video.closest('.history-thumbnail')?.classList.add('is-loaded'), { once: true });
+    video.addEventListener('error', () => {
+      video.hidden = true;
+      video.closest('.history-thumbnail')?.classList.add('is-fallback');
+    }, { once: true });
+    videoThumbnailObserver.observe(video);
+  });
+}
+
 function renderHistory(data) {
   const rows = (data.items || []).map((item) => {
     const canOpen = ['completed', 'skipped'].includes(item.status);
     const mediaUrl = `/api/downloads/${item.id}/media`;
     const fileName = displayFileName(item.file_name);
+    const isVideo = ['video', 'video_note', 'animation'].includes(item.media_type);
+    const isPhoto = item.media_type === 'photo';
     let action = '—';
     if (canOpen) {
-      if (['video', 'video_note', 'animation'].includes(item.media_type)) {
+      if (isVideo) {
         action = `<button class="history-media-link" type="button" data-play-media data-media-url="${mediaUrl}" data-media-title="${TMD.escape(fileName)}">播放</button>`;
-      } else if (item.media_type === 'photo') {
+      } else if (isPhoto) {
         action = `<button class="history-media-link" type="button" data-preview-image data-media-url="${mediaUrl}" data-media-title="${TMD.escape(fileName)}">查看</button>`;
       } else {
         action = `<a class="history-media-link" href="${mediaUrl}" target="_blank" rel="noopener">${mediaActionLabel(item.media_type)}</a>`;
       }
     }
-    const mediaPreview = canOpen && item.media_type === 'photo'
-      ? `<button class="history-thumbnail" type="button" data-preview-image data-media-url="${mediaUrl}" data-media-title="${TMD.escape(fileName)}" aria-label="放大图片：${TMD.escape(fileName)}"><img src="${mediaUrl}" alt="${TMD.escape(fileName)}" loading="lazy" decoding="async"></button>`
-      : '';
+    let mediaPreview = mediaTypeIconHtml(item.media_type, 'media-icon history-type-icon');
+    if (canOpen && isPhoto) {
+      mediaPreview = `<button class="history-thumbnail history-photo-thumbnail" type="button" data-preview-image data-media-url="${mediaUrl}" data-media-title="${TMD.escape(fileName)}" aria-label="查看图片：${TMD.escape(fileName)}"><img src="${mediaUrl}" alt="${TMD.escape(fileName)}" loading="lazy" decoding="async">${mediaTypeIconHtml(item.media_type, 'history-type-badge')}</button>`;
+    } else if (canOpen && isVideo) {
+      mediaPreview = `<button class="history-thumbnail history-video-thumbnail" type="button" data-play-media data-media-url="${mediaUrl}" data-media-title="${TMD.escape(fileName)}" aria-label="播放视频：${TMD.escape(fileName)}"><video data-lazy-video-thumbnail data-thumbnail-src="${TMD.escape(`${mediaUrl}#t=0.1`)}" preload="none" muted playsinline aria-hidden="true"></video><span class="history-play-badge" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 7.5v9l7-4.5-7-4.5Z"></path></svg></span>${mediaTypeIconHtml(item.media_type, 'history-type-badge')}</button>`;
+    }
     return `<tr>
       <td><span class="tag tag-${TMD.escape(item.status)}">${TMD.escape(historyLabels[item.status] || item.status)}</span></td>
       <td>${TMD.escape(item.chat_title)}</td>
       <td class="file-cell" title="${TMD.escape(item.file_name)}">${TMD.escape(fileName)}</td>
-      <td><div class="history-media-cell">${mediaPreview}<span>${TMD.escape(item.media_type)}</span></div></td>
+      <td><div class="history-media-cell">${mediaPreview}</div></td>
       <td><div class="inline-progress"><span style="width:${progressPercent(item)}%"></span></div><small>${formatBytes(item.downloaded_size)} / ${formatBytes(item.total_size)}</small></td>
       <td>${TMD.escape(item.started_at)}</td>
       <td>${action}</td>
     </tr>`;
   }).join('');
   document.getElementById('history-body').innerHTML = rows || '<tr><td colspan="7" class="empty-state">暂无下载记录</td></tr>';
+  observeVideoThumbnails(document.getElementById('history-body'));
   document.getElementById('history-total').textContent = `${data.total || 0} 条`;
   document.getElementById('history-page-info').textContent = `第 ${data.page || 1} / ${data.pages || 1} 页`;
   document.getElementById('history-prev').disabled = Number(data.page) <= 1;

@@ -9,12 +9,15 @@ from types import SimpleNamespace
 import pytest
 
 from app.downloader import (
+    DOWNLOAD_CHUNK_SIZE,
     DownloaderService,
     build_destination,
     build_group_destination,
     detect_media,
     format_is_allowed,
     media_extension,
+    partial_download_path,
+    resumable_download_offset,
 )
 from app.schemas import parse_date_bound
 from app.telegram_manager import TelegramManager
@@ -177,6 +180,7 @@ async def test_channel_filter_skips_non_matching_media(tmp_path: Path, monkeypat
     last_messages = []
     database = SimpleNamespace(
         update_chat_metadata=lambda *args, **kwargs: None,
+        resumable_downloads=lambda chat_id: [],
         set_last_message=lambda chat_id, message_id: last_messages.append(
             (chat_id, message_id)
         ),
@@ -279,6 +283,7 @@ async def test_download_chat_processes_new_messages_oldest_first(
     last_messages = []
     database = SimpleNamespace(
         update_chat_metadata=lambda *args, **kwargs: None,
+        resumable_downloads=lambda chat_id: [],
         set_last_message=lambda chat_id, message_id: last_messages.append(
             (chat_id, message_id)
         ),
@@ -338,3 +343,138 @@ def test_downloader_history_page_uses_offset_and_total(tmp_path: Path):
         "pages": 4,
     }
     assert calls == [(10, 20, True)]
+
+
+def test_resumable_download_offset_aligns_partial_file(tmp_path: Path):
+    partial = tmp_path / "video.mp4.temp"
+    partial.write_bytes(b"x" * (DOWNLOAD_CHUNK_SIZE + 321))
+
+    offset = resumable_download_offset(partial, DOWNLOAD_CHUNK_SIZE * 2)
+
+    assert offset == DOWNLOAD_CHUNK_SIZE
+    assert partial.stat().st_size == DOWNLOAD_CHUNK_SIZE
+
+
+@pytest.mark.asyncio
+async def test_download_resumes_from_partial_chunk(tmp_path: Path, monkeypatch):
+    payload = b"a" * DOWNLOAD_CHUNK_SIZE + b"tail"
+    destination = tmp_path / "video.mp4"
+    partial = partial_download_path(destination)
+    partial.write_bytes(payload[:DOWNLOAD_CHUNK_SIZE])
+    calls = []
+    updates = []
+
+    class FakeClient:
+        async def get_file(self, file_id, file_size, offset):
+            calls.append((file_id, file_size, offset))
+            yield payload[offset * DOWNLOAD_CHUNK_SIZE :]
+
+    database = SimpleNamespace(
+        create_download=lambda *args: 7,
+        update_download=lambda download_id, **kwargs: updates.append(
+            (download_id, kwargs)
+        ),
+    )
+    telegram = SimpleNamespace(get_client=lambda: _async_value(FakeClient()))
+    service = DownloaderService(database, SimpleNamespace(), telegram)
+    monkeypatch.setattr(
+        "app.downloader.FileId.decode", lambda file_id: f"decoded:{file_id}"
+    )
+
+    success = await service._perform_download_message(
+        message=SimpleNamespace(id=42),
+        media=SimpleNamespace(file_id="telegram-file", file_size=len(payload)),
+        media_type="video",
+        file_name="video.mp4",
+        chat_id=1,
+        chat_title="Resume Demo",
+        destination_override=destination,
+    )
+
+    assert success is True
+    assert calls == [("decoded:telegram-file", len(payload), 1)]
+    assert destination.read_bytes() == payload
+    assert not partial.exists()
+    assert any(update[1].get("status") == "completed" for update in updates)
+
+
+@pytest.mark.asyncio
+async def test_failed_download_keeps_partial_for_resume(tmp_path: Path, monkeypatch):
+    destination = tmp_path / "video.mp4"
+    partial = partial_download_path(destination)
+    updates = []
+
+    class FakeClient:
+        async def get_file(self, file_id, file_size, offset):
+            yield b"partial-data"
+            raise RuntimeError("connection lost")
+
+    database = SimpleNamespace(
+        create_download=lambda *args: 8,
+        update_download=lambda download_id, **kwargs: updates.append(
+            (download_id, kwargs)
+        ),
+    )
+    telegram = SimpleNamespace(get_client=lambda: _async_value(FakeClient()))
+    service = DownloaderService(database, SimpleNamespace(), telegram)
+    monkeypatch.setattr("app.downloader.FileId.decode", lambda file_id: file_id)
+
+    success = await service._perform_download_message(
+        message=SimpleNamespace(id=43),
+        media=SimpleNamespace(file_id="telegram-file", file_size=20),
+        media_type="video",
+        file_name="video.mp4",
+        chat_id=1,
+        chat_title="Resume Demo",
+        destination_override=destination,
+    )
+
+    assert success is False
+    assert partial.read_bytes() == b"partial-data"
+    assert not destination.exists()
+    assert any(update[1].get("status") == "failed" for update in updates)
+    assert service.last_error
+
+
+@pytest.mark.asyncio
+async def test_resume_incomplete_downloads_uses_saved_destination(
+    tmp_path: Path, monkeypatch
+):
+    destination = tmp_path / "existing.mp4"
+    record = {
+        "id": 9,
+        "message_id": 99,
+        "file_name": str(destination),
+    }
+    message = SimpleNamespace(id=99)
+    media = SimpleNamespace(file_name="existing.mp4", file_size=10, file_id="file")
+    calls = []
+
+    class FakeClient:
+        async def get_messages(self, chat_ref, message_ids):
+            calls.append(("get_messages", chat_ref, message_ids))
+            return message
+
+    database = SimpleNamespace(resumable_downloads=lambda chat_id: [record])
+    settings = SimpleNamespace(download_dir=lambda: tmp_path)
+    service = DownloaderService(database, settings, SimpleNamespace())
+    service.state = "running"
+    monkeypatch.setattr("app.downloader.detect_media", lambda value: ("video", media))
+
+    async def fake_download(**kwargs):
+        calls.append(("download", kwargs))
+        return True
+
+    monkeypatch.setattr(service, "_download_message", fake_download)
+
+    resumed = await service._resume_incomplete_downloads(
+        client=FakeClient(),
+        chat={"id": 1},
+        chat_ref="@resume",
+        chat_title="Resume Demo",
+    )
+
+    assert resumed is True
+    assert calls[0] == ("get_messages", "@resume", 99)
+    assert calls[1][0] == "download"
+    assert calls[1][1]["destination_override"] == destination

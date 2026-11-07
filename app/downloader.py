@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pyrogram.file_id import FileId
+
 from app.database import Database
 from app.download_filter import build_filter_context, compile_download_filter
 from app.schemas import parse_date_bound
@@ -37,6 +39,7 @@ EXTENSION_OVERRIDES = {
     "application/pdf": ".pdf",
 }
 INVALID_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 def detect_media(message: Any) -> tuple[str, Any] | None:
@@ -97,6 +100,27 @@ def safe_destination(root: Path, parts: list[str], file_name: str) -> Path:
     except ValueError as exc:
         raise ValueError("目标路径越界") from exc
     return resolved
+
+
+def partial_download_path(destination: Path) -> Path:
+    return destination.with_name(f"{destination.name}.temp")
+
+
+def resumable_download_offset(partial: Path, total_size: int = 0) -> int:
+    """Return a Telegram chunk-aligned offset while keeping the partial file."""
+    try:
+        size = partial.stat().st_size
+    except OSError:
+        return 0
+    if total_size > 0:
+        size = min(size, total_size)
+    offset = size - (size % DOWNLOAD_CHUNK_SIZE)
+    try:
+        with partial.open("r+b") as file:
+            file.truncate(offset)
+    except OSError:
+        return 0
+    return offset
 
 
 def build_destination(
@@ -300,7 +324,7 @@ class DownloaderService:
     async def resume(self) -> dict[str, Any]:
         if self.state == "paused":
             self.state = "running"
-        elif self.state == "stopped":
+        elif self.state != "running":
             return await self.start()
         return self.snapshot()
 
@@ -451,6 +475,75 @@ class DownloaderService:
         if self.state == "stopped":
             raise asyncio.CancelledError
 
+    async def _resume_incomplete_downloads(
+        self,
+        *,
+        client: Any,
+        chat: dict[str, Any],
+        chat_ref: int | str,
+        chat_title: str,
+    ) -> bool:
+        records = self.database.resumable_downloads(chat["id"])
+        if not records:
+            return True
+        root = self.settings.download_dir().resolve()
+        for record in records:
+            await self._wait_if_paused()
+            record_id = int(record["id"])
+            destination = Path(str(record.get("file_name", ""))).resolve()
+            try:
+                destination.relative_to(root)
+            except ValueError:
+                self.database.update_download(
+                    record_id,
+                    status="failed",
+                    error="下载记录路径不在当前下载目录内，无法继续",
+                )
+                continue
+
+            try:
+                message = await client.get_messages(
+                    chat_ref, message_ids=int(record["message_id"])
+                )
+            except Exception as exc:
+                logger.exception("Unable to reload message for resume")
+                self.database.update_download(
+                    record_id,
+                    status="failed",
+                    error=f"恢复下载失败：{exc}",
+                )
+                continue
+            if message is None:
+                self.database.update_download(
+                    record_id,
+                    status="failed",
+                    error="原 Telegram 消息不存在，无法继续下载",
+                )
+                continue
+
+            detected = detect_media(message)
+            if detected is None:
+                self.database.update_download(
+                    record_id,
+                    status="failed",
+                    error="原 Telegram 消息已不包含可下载媒体",
+                )
+                continue
+
+            media_type, media = detected
+            success = await self._download_message(
+                message=message,
+                media=media,
+                media_type=media_type,
+                file_name=getattr(media, "file_name", None),
+                chat_id=chat["id"],
+                chat_title=chat_title,
+                destination_override=destination,
+            )
+            if not success:
+                return False
+        return True
+
     async def _download_chat(self, chat: dict[str, Any]) -> None:
         client = await self.telegram.get_client()
         chat_ref: int | str = chat["chat_ref"]
@@ -461,6 +554,14 @@ class DownloaderService:
         title = getattr(telegram_chat, "title", None) or getattr(telegram_chat, "username", None) or chat["title"] or str(chat_ref)
         self.database.update_chat_metadata(chat["id"], title=str(title))
         self.current_chat = str(title)
+
+        if not await self._resume_incomplete_downloads(
+            client=client,
+            chat=chat,
+            chat_ref=chat_ref,
+            chat_title=str(title),
+        ):
+            return
 
         date_from = parse_date_bound(chat.get("date_from"))
         date_to = parse_date_bound(chat.get("date_to"), end_of_day=True)
@@ -579,72 +680,133 @@ class DownloaderService:
             media_type,
             total_size,
         )
+        partial = partial_download_path(destination)
 
-        if destination.exists() and destination.stat().st_size > 0:
-            self.database.update_download(record_id, status="skipped")
+        def file_size(path: Path) -> int:
+            try:
+                return path.stat().st_size
+            except OSError:
+                return 0
+
+        final_size = file_size(destination)
+        if final_size > 0 and (total_size <= 0 or final_size >= total_size):
+            self.database.update_download(
+                record_id, status="skipped", downloaded_size=final_size
+            )
             return True
 
+        # Older versions wrote directly to the final name. Preserve that data so
+        # it can be resumed instead of downloading the file from byte zero.
+        if final_size > file_size(partial):
+            if partial.exists():
+                partial.unlink()
+            destination.replace(partial)
+
+        partial_size = file_size(partial)
+        if total_size > 0 and partial_size >= total_size:
+            with partial.open("r+b") as file:
+                file.truncate(total_size)
+            partial.replace(destination)
+            self.database.update_download(
+                record_id,
+                status="completed",
+                downloaded_size=total_size,
+                file_name=str(destination),
+            )
+            return True
+
+        start_size = resumable_download_offset(partial, total_size)
         active = {
             "record_id": record_id,
             "chat": chat_title,
             "message_id": message.id,
             "file_name": destination.name,
             "media_type": media_type,
-            "downloaded": 0,
+            "downloaded": start_size,
             "total": total_size,
             "status": "downloading",
             "started_at": time.time(),
             "updated_at": time.time(),
             "speed": 0.0,
             "last_sample_at": time.monotonic(),
-            "last_sample_bytes": 0,
+            "last_sample_bytes": start_size,
         }
         async with self._active_lock:
             self._active[record_id] = active
+        self.database.update_download(record_id, downloaded_size=start_size)
 
-        last_update = 0.0
+        downloaded = start_size
+        last_update = time.monotonic()
 
-        async def progress(current: int, total: int, *_: Any) -> None:
+        def update_progress(force: bool = False) -> None:
             nonlocal last_update
             now = time.monotonic()
-            active["downloaded"] = int(current)
-            active["total"] = int(total or total_size)
+            if not force and now - last_update < 0.5:
+                return
+            active["downloaded"] = downloaded
+            active["total"] = total_size
             active["updated_at"] = time.time()
-            if now - last_update >= 0.5:
-                elapsed = now - float(active["last_sample_at"])
-                delta = int(current) - int(active["last_sample_bytes"])
-                if elapsed > 0:
-                    active["speed"] = max(0.0, delta / elapsed)
-                active["last_sample_at"] = now
-                active["last_sample_bytes"] = int(current)
-                self.database.update_download(record_id, downloaded_size=int(current))
-                last_update = now
+            elapsed = now - float(active["last_sample_at"])
+            delta = downloaded - int(active["last_sample_bytes"])
+            if elapsed > 0:
+                active["speed"] = max(0.0, delta / elapsed)
+            active["last_sample_at"] = now
+            active["last_sample_bytes"] = downloaded
+            self.database.update_download(record_id, downloaded_size=downloaded)
+            last_update = now
 
         try:
-            result = await message.download(
-                file_name=str(destination),
-                progress=progress,
-                progress_args=(),
-            )
-            if result is None:
+            client = await self.telegram.get_client()
+            file_id = getattr(media, "file_id", None)
+            if not file_id:
+                raise RuntimeError("媒体文件标识缺失，无法下载")
+            decoded_file_id = FileId.decode(str(file_id))
+            with partial.open("ab") as file:
+                async for chunk in client.get_file(
+                    decoded_file_id,
+                    file_size=total_size,
+                    offset=start_size // DOWNLOAD_CHUNK_SIZE,
+                ):
+                    file.write(chunk)
+                    file.flush()
+                    downloaded += len(chunk)
+                    if total_size > 0 and downloaded > total_size:
+                        raise RuntimeError("Telegram 返回的数据超过预期文件大小")
+                    update_progress()
+
+            update_progress(force=True)
+            completed_size = file_size(partial)
+            if total_size > 0 and completed_size != total_size:
+                raise RuntimeError(
+                    f"下载不完整：已接收 {completed_size} / {total_size} 字节"
+                )
+            if completed_size <= 0:
                 raise RuntimeError("Telegram 未返回下载文件")
-            size = destination.stat().st_size if destination.exists() else int(active["total"])
+            partial.replace(destination)
             self.database.update_download(
                 record_id,
                 status="completed",
-                downloaded_size=size,
+                downloaded_size=completed_size,
                 file_name=str(destination),
             )
             return True
         except asyncio.CancelledError:
             self.database.update_download(
-                record_id, status="failed", error="下载已停止"
+                record_id,
+                status="failed",
+                downloaded_size=downloaded,
+                error="下载已停止，临时文件已保留，可继续下载",
             )
             raise
         except Exception as exc:
             logger.exception("Failed to download message %s", message.id)
-            self.database.update_download(record_id, status="failed", error=str(exc))
-            self.last_error = f"{chat_title} / {message.id}: {exc}"
+            self.database.update_download(
+                record_id,
+                status="failed",
+                downloaded_size=downloaded,
+                error=f"{exc}（已保留临时文件，可继续下载）",
+            )
+            self.last_error = f"{chat_title}: {message.id}: {exc}"
             return False
         finally:
             async with self._active_lock:

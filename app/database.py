@@ -262,7 +262,7 @@ class Database:
         total_size: int,
     ) -> int:
         with self._lock, self._connect() as connection:
-            cursor = connection.execute(
+            connection.execute(
                 """
                 INSERT INTO downloads(
                     chat_id, chat_title, message_id, file_name, media_type,
@@ -289,11 +289,11 @@ class Database:
                     utc_now(),
                 ),
             )
-            if cursor.lastrowid:
-                row = connection.execute(
-                    "SELECT id FROM downloads WHERE chat_id = ? AND message_id = ?",
-                    (chat_id, message_id),
-                ).fetchone()
+            row = connection.execute(
+                "SELECT id FROM downloads WHERE chat_id = ? AND message_id = ?",
+                (chat_id, message_id),
+            ).fetchone()
+            if row is not None:
                 return int(row["id"])
         raise RuntimeError("Unable to create download record")
 
@@ -337,6 +337,18 @@ class Database:
                 "SELECT * FROM downloads WHERE id = ?", (download_id,)
             ).fetchone()
         return dict(row) if row else None
+
+    def resumable_downloads(self, chat_id: int) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM downloads
+                WHERE chat_id = ? AND status IN ('downloading', 'failed')
+                ORDER BY message_id ASC
+                """,
+                (chat_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def recent_downloads(
         self,
