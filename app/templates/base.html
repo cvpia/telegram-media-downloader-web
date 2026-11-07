@@ -39,6 +39,18 @@
     <span class="version-pill">v{{ app_version }}</span>
   </footer>
 
+  {% if authenticated %}
+  <dialog class="video-dialog" id="video-dialog">
+    <div class="video-dialog-shell">
+      <header class="video-dialog-heading">
+        <div><strong id="video-dialog-title">视频播放</strong><small id="video-dialog-subtitle">在线播放 · 支持拖动进度</small></div>
+        <button class="icon-button" id="close-video-dialog" type="button" title="关闭视频播放">×</button>
+      </header>
+      <video id="video-player" controls autoplay playsinline preload="metadata"></video>
+    </div>
+  </dialog>
+  {% endif %}
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/static/app.js"></script>
   {% block scripts %}{% endblock %}

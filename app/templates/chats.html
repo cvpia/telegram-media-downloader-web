@@ -155,16 +155,6 @@
   </form>
 </dialog>
 
-<dialog class="video-dialog" id="video-dialog">
-  <div class="video-dialog-shell">
-    <header class="video-dialog-heading">
-      <div><strong id="video-dialog-title">视频播放</strong><small>在线播放 · 支持拖动进度</small></div>
-      <button class="icon-button" id="close-video-dialog" type="button" title="关闭视频播放">×</button>
-    </header>
-    <video id="video-player" controls autoplay playsinline preload="metadata"></video>
-  </div>
-</dialog>
-
 {% endblock %}
 {% block scripts %}
 <script>
@@ -438,33 +428,6 @@ function formatMessageDate(value) {
   return date.toLocaleString('zh-CN', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
   });
-}
-
-function resetVideoPlayer() {
-  const player = document.getElementById('video-player');
-  if (typeof player.pause === 'function') player.pause();
-  if (typeof player.removeAttribute === 'function') player.removeAttribute('src');
-  if (typeof player.load === 'function') player.load();
-}
-
-function openVideoPlayer(url, title) {
-  if (!url) return;
-  const dialog = document.getElementById('video-dialog');
-  const player = document.getElementById('video-player');
-  document.getElementById('video-dialog-title').textContent = title || '视频播放';
-  player.src = url;
-  if (typeof dialog.showModal === 'function') dialog.showModal();
-  else dialog.setAttribute('open', '');
-  if (typeof player.play === 'function') player.play().catch(() => {});
-}
-
-function closeVideoPlayer() {
-  const dialog = document.getElementById('video-dialog');
-  if (dialog.open && typeof dialog.close === 'function') dialog.close();
-  else {
-    dialog.removeAttribute('open');
-    resetVideoPlayer();
-  }
 }
 
 function readMessageCache(dialogId) {
@@ -760,7 +723,7 @@ document.getElementById('close-dialog-preview').addEventListener('click', closeD
 document.getElementById('dialog-messages').addEventListener('click', async (event) => {
   const videoPreview = event.target.closest('[data-play-video]');
   if (videoPreview) {
-    openVideoPlayer(videoPreview.dataset.mediaUrl, videoPreview.dataset.mediaTitle);
+    TMD.openVideo(videoPreview.dataset.mediaUrl, videoPreview.dataset.mediaTitle);
     return;
   }
   const retryMessages = event.target.closest('[data-retry-messages]');
@@ -866,11 +829,6 @@ document.getElementById('close-rule-dialog').addEventListener('click', () => {
 document.getElementById('rule-dialog').addEventListener('click', (event) => {
   if (event.target === event.currentTarget) event.currentTarget.close();
 });
-document.getElementById('close-video-dialog').addEventListener('click', closeVideoPlayer);
-document.getElementById('video-dialog').addEventListener('click', (event) => {
-  if (event.target === event.currentTarget) closeVideoPlayer();
-});
-document.getElementById('video-dialog').addEventListener('close', resetVideoPlayer);
 document.getElementById('rule-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const dialog = document.getElementById('rule-dialog');

@@ -234,7 +234,9 @@ def test_authenticated_incomplete_setup_can_open_monitor(client: TestClient):
 def test_static_assets_and_authenticated_pages_render(client: TestClient):
     token = initialize_admin(client)
     assert client.get("/static/app.css").status_code == 200
-    assert client.get("/static/app.js").status_code == 200
+    app_js_response = client.get("/static/app.js")
+    assert app_js_response.status_code == 200
+    app_js = app_js_response.text
     settings_page = client.get("/settings")
     assert settings_page.status_code == 200
     assert "系统设置" in settings_page.text
@@ -258,8 +260,9 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert 'data-play-video data-media-url="${fullMedia}"' in chats_page.text
     assert 'id="video-dialog"' in chats_page.text
     assert 'id="video-player"' in chats_page.text
-    assert "typeof player.load === 'function'" in chats_page.text
-    assert "typeof player.play === 'function'" in chats_page.text
+    assert "typeof player.load === 'function'" in app_js
+    assert "typeof player.play === 'function'" in app_js
+    assert "openVideo" in app_js
     assert 'id="sync-state"' in chats_page.text
     assert "tmd:dialogs:v2" in chats_page.text
     assert "localStorage" in chats_page.text
@@ -283,6 +286,7 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert 'data-monitor-tab="history"' in dashboard.text
     assert 'id="history-page-info"' in dashboard.text
     assert "下载监控" in dashboard.text
+    assert "data-play-media" in dashboard.text
 
     setup = client.get("/setup?edit=1")
     assert setup.status_code == 200, setup.text

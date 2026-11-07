@@ -192,9 +192,13 @@ function mediaActionLabel(mediaType) {
 function renderHistory(data) {
   const rows = (data.items || []).map((item) => {
     const canOpen = ['completed', 'skipped'].includes(item.status);
-    const action = canOpen
-      ? `<a class="history-media-link" href="/api/downloads/${item.id}/media" target="_blank" rel="noopener">${mediaActionLabel(item.media_type)}</a>`
-      : '—';
+    let action = '—';
+    if (canOpen) {
+      const mediaUrl = `/api/downloads/${item.id}/media`;
+      action = ['video', 'video_note', 'animation'].includes(item.media_type)
+        ? `<button class="history-media-link" type="button" data-play-media data-media-url="${mediaUrl}" data-media-title="${TMD.escape(item.file_name)}">播放</button>`
+        : `<a class="history-media-link" href="${mediaUrl}" target="_blank" rel="noopener">${mediaActionLabel(item.media_type)}</a>`;
+    }
     return `<tr>
       <td><span class="tag tag-${TMD.escape(item.status)}">${TMD.escape(historyLabels[item.status] || item.status)}</span></td>
       <td>${TMD.escape(item.chat_title)}</td>
@@ -249,6 +253,11 @@ document.getElementById('history-prev').addEventListener('click', () => {
 });
 document.getElementById('history-next').addEventListener('click', () => {
   if (historyPage < historyPages) loadHistory(historyPage + 1);
+});
+document.getElementById('history-body').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-play-media]');
+  if (!button) return;
+  TMD.openVideo(button.dataset.mediaUrl, button.dataset.mediaTitle || '视频播放', '已下载视频 · 支持拖动进度');
 });
 
 function renderStatus(data) {

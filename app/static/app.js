@@ -63,6 +63,48 @@
     toastTimer = setTimeout(() => element.classList.remove('show'), 3500);
   }
 
+  function resetVideoPlayer() {
+    const dialog = document.getElementById('video-dialog');
+    const player = document.getElementById('video-player');
+    if (!dialog || !player) return;
+    if (typeof player.pause === 'function') player.pause();
+    if (typeof player.removeAttribute === 'function') player.removeAttribute('src');
+    if (typeof player.load === 'function') player.load();
+  }
+
+  function openVideo(url, title = '视频播放', subtitle = '在线播放 · 支持拖动进度') {
+    const dialog = document.getElementById('video-dialog');
+    const player = document.getElementById('video-player');
+    if (!dialog || !player || !url) return;
+    document.getElementById('video-dialog-title').textContent = title;
+    document.getElementById('video-dialog-subtitle').textContent = subtitle;
+    player.src = url;
+    if (!dialog.open) {
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+      else dialog.setAttribute('open', '');
+    }
+    if (typeof player.play === 'function') player.play().catch(() => {});
+  }
+
+  function closeVideo() {
+    const dialog = document.getElementById('video-dialog');
+    if (!dialog) return;
+    if (dialog.open && typeof dialog.close === 'function') dialog.close();
+    else {
+      dialog.removeAttribute('open');
+      resetVideoPlayer();
+    }
+  }
+
+  const videoDialog = document.getElementById('video-dialog');
+  if (videoDialog) {
+    document.getElementById('close-video-dialog')?.addEventListener('click', closeVideo);
+    videoDialog.addEventListener('click', (event) => {
+      if (event.target === videoDialog) closeVideo();
+    });
+    videoDialog.addEventListener('close', resetVideoPlayer);
+  }
+
   const logout = document.getElementById('logout-button');
   if (logout) {
     logout.addEventListener('click', async () => {
@@ -75,5 +117,5 @@
     });
   }
 
-  window.TMD = { api, escape: escapeHtml, toast };
+  window.TMD = { api, escape: escapeHtml, toast, openVideo, closeVideo };
 })();
