@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime
@@ -43,6 +45,7 @@ class TelegramManager:
         self._pending: dict[str, PendingLogin] = {}
         self._client: Client | None = None
         self._lock = asyncio.Lock()
+        self._preview_lock = asyncio.Lock()
 
     @property
     def session_path(self) -> Path:
@@ -478,18 +481,94 @@ class TelegramManager:
             "media_type": media_type,
             "media_label": media_labels.get(media_type, ""),
             "media_name": media_name,
+            "has_media": media is not None,
         }
 
     async def list_dialog_messages(
-        self, dialog_id: str, limit: int = 30
+        self,
+        dialog_id: str,
+        limit: int = 30,
+        before_id: int | None = None,
     ) -> list[dict[str, Any]]:
         client = await self.get_client()
         message_limit = max(1, min(int(limit), 100))
+        kwargs: dict[str, Any] = {}
+        if before_id is not None:
+            kwargs["offset_id"] = int(before_id)
         messages: list[dict[str, Any]] = []
-        async for message in client.get_chat_history(dialog_id, limit=message_limit):
-            messages.append(self._message_info(message))
+        async for message in client.get_chat_history(
+            dialog_id, limit=message_limit, **kwargs
+        ):
+            item = self._message_info(message)
+            if item["media_type"] in {"photo", "video", "video_note", "animation"}:
+                item["preview_url"] = (
+                    f"/api/telegram/dialogs/{dialog_id}/messages/{item['id']}/media"
+                )
+            else:
+                item["preview_url"] = ""
+            messages.append(item)
         messages.reverse()
         return messages
+
+    async def get_message_media_file(
+        self, dialog_id: str, message_id: int
+    ) -> tuple[Path, str]:
+        client = await self.get_client()
+        message = await client.get_messages(dialog_id, message_ids=message_id)
+        if isinstance(message, list):
+            message = message[0] if message else None
+        if message is None:
+            raise ValueError("消息不存在或已被删除")
+        media_type = ""
+        media = None
+        for candidate in (
+            "photo",
+            "video",
+            "audio",
+            "document",
+            "voice",
+            "video_note",
+            "animation",
+        ):
+            value = getattr(message, candidate, None)
+            if value is not None:
+                media_type, media = candidate, value
+                break
+        if media is None:
+            raise ValueError("该消息不包含可预览媒体")
+
+        file_name = str(getattr(media, "file_name", "") or "")
+        suffix = Path(file_name).suffix.lower()
+        if not suffix:
+            mime_type = str(getattr(media, "mime_type", "") or "")
+            suffix = {
+                "photo": ".jpg",
+                "video": ".mp4",
+                "video_note": ".mp4",
+                "animation": ".mp4",
+                "audio": ".mp3",
+                "voice": ".ogg",
+            }.get(media_type) or (mimetypes.guess_extension(mime_type) if mime_type else None) or ".bin"
+        cache_dir = self.session_dir / "preview_cache" / re.sub(r"[^0-9A-Za-z_.-]", "_", str(dialog_id))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        target = cache_dir / f"{message_id}{suffix}"
+        async with self._preview_lock:
+            if not target.exists() or target.stat().st_size == 0:
+                temporary = target.with_suffix(target.suffix + ".part")
+                if temporary.exists():
+                    temporary.unlink()
+                downloaded = await client.download_media(
+                    message, file_name=str(temporary), block=True
+                )
+                if downloaded is None or not temporary.exists():
+                    raise RuntimeError("Telegram 媒体缓存下载失败")
+                temporary.replace(target)
+        mime_type = (
+            mimetypes.guess_type(str(target))[0]
+            or getattr(media, "mime_type", None)
+            or "application/octet-stream"
+        )
+        return target, str(mime_type)
 
     async def logout(self) -> None:
         async with self._lock:

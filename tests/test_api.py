@@ -240,12 +240,32 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert 'id="stat-speed"' in dashboard.text
     assert 'id="stat-eta"' in dashboard.text
     assert 'id="disk-free"' in dashboard.text
+    assert 'data-monitor-tab="history"' in dashboard.text
+    assert 'id="history-page-info"' in dashboard.text
     assert "下载监控" in dashboard.text
 
     setup = client.get("/setup?edit=1")
     assert setup.status_code == 200, setup.text
     assert "配置向导" in setup.text
     assert "下载偏好" in setup.text
+
+
+def test_telegram_dialog_messages_before_id_api(client: TestClient, monkeypatch):
+    initialize_admin(client)
+    telegram = client.app.state.services.telegram
+
+    async def fake_messages(dialog_id, limit, before_id):
+        assert dialog_id == "-100123"
+        assert limit == 50
+        assert before_id == 60
+        return [{"id": 59, "text": "Older", "has_media": False}]
+
+    monkeypatch.setattr(telegram, "list_dialog_messages", fake_messages)
+    response = client.get(
+        "/api/telegram/dialogs/-100123/messages?limit=50&before_id=60"
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()[0]["id"] == 59
 
 
 def test_channel_filter_validation_api(client: TestClient):
@@ -406,3 +426,76 @@ def test_telegram_dialog_messages_and_avatar_api(client: TestClient, monkeypatch
     assert response.headers["content-type"] == "image/png"
     assert response.headers["cache-control"] == "private, max-age=86400"
     assert response.content.startswith(b"\x89PNG")
+
+
+def test_media_preview_direct_download_and_history_api(
+    client: TestClient, monkeypatch, tmp_path
+):
+    token = initialize_admin(client)
+    headers = {"X-CSRF-Token": token}
+    services = client.app.state.services
+    chat = services.database.upsert_chat("@media_demo", "Media Demo")
+
+    preview_file = tmp_path / "preview.jpg"
+    preview_file.write_bytes(b"preview-image")
+
+    async def fake_preview(dialog_id, message_id):
+        assert dialog_id == "-100123"
+        assert message_id == 9
+        return preview_file, "image/jpeg"
+
+    async def fake_direct(dialog_id, message_id, chat_title):
+        assert dialog_id == "-100123"
+        assert message_id == 9
+        assert chat_title == "Media Demo"
+        return {
+            "ok": True,
+            "status": "queued",
+            "chat_title": chat_title,
+            "file_name": "image.jpg",
+            "relative_path": "Media Demo/image.jpg",
+        }
+
+    monkeypatch.setattr(services.telegram, "get_message_media_file", fake_preview)
+    monkeypatch.setattr(services.downloader, "start_direct_download", fake_direct)
+
+    response = client.get(
+        "/api/telegram/dialogs/-100123/messages/9/media"
+    )
+    assert response.status_code == 200
+    assert response.content == b"preview-image"
+    assert response.headers["content-type"].startswith("image/jpeg")
+
+    response = client.post(
+        "/api/telegram/dialogs/-100123/messages/9/download",
+        json={"chat_title": "Media Demo"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "queued"
+
+    first_file = services.settings.download_dir() / "Media Demo" / "one.mp4"
+    second_file = services.settings.download_dir() / "Media Demo" / "two.mp4"
+    first_file.parent.mkdir(parents=True, exist_ok=True)
+    first_file.write_bytes(b"video-one")
+    second_file.write_bytes(b"video-two")
+    first_id = services.database.create_download(
+        chat["id"], "Media Demo", 1, str(first_file), "video", 9
+    )
+    second_id = services.database.create_download(
+        chat["id"], "Media Demo", 2, str(second_file), "video", 9
+    )
+    services.database.update_download(first_id, status="completed", downloaded_size=9)
+    services.database.update_download(second_id, status="completed", downloaded_size=9)
+
+    history = client.get("/api/downloads/history?page=1&page_size=1")
+    assert history.status_code == 200, history.text
+    payload = history.json()
+    assert payload["total"] == 2
+    assert payload["pages"] == 2
+    assert len(payload["items"]) == 1
+
+    media = client.get(f"/api/downloads/{first_id}/media")
+    assert media.status_code == 200
+    assert media.content == b"video-one"
+    assert media.headers["content-type"].startswith("video/mp4")

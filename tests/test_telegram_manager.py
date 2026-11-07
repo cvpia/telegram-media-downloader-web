@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -139,6 +140,7 @@ def test_message_info_serializes_caption_and_media():
         "media_type": "video",
         "media_label": "视频",
         "media_name": "demo.mp4",
+        "has_media": True,
     }
 
 
@@ -210,3 +212,100 @@ async def test_get_dialog_avatar_downloads_small_photo(tmp_path, monkeypatch):
     avatar = await manager.get_dialog_avatar("-100123")
 
     assert avatar == (b"avatar-bytes", "image/jpeg")
+
+
+@pytest.mark.asyncio
+async def test_list_dialog_messages_marks_media_preview(tmp_path, monkeypatch):
+    manager = TelegramManager(settings=None, session_dir=tmp_path)
+    message = SimpleNamespace(
+        id=22,
+        date=None,
+        from_user=None,
+        sender_chat=SimpleNamespace(title="Channel"),
+        text="",
+        caption="Video",
+        media=SimpleNamespace(value="video"),
+        video=SimpleNamespace(file_name="clip.mp4"),
+    )
+
+    class FakeClient:
+        async def get_chat_history(self, dialog_id, limit):
+            yield message
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(manager, "get_client", fake_get_client)
+    result = await manager.list_dialog_messages("-100123", 10)
+
+    assert result[0]["has_media"] is True
+    assert result[0]["preview_url"] == (
+        "/api/telegram/dialogs/-100123/messages/22/media"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_message_media_file_caches_video(tmp_path, monkeypatch):
+    manager = TelegramManager(settings=None, session_dir=tmp_path)
+    media = SimpleNamespace(file_name="clip.mp4", mime_type="video/mp4")
+    message = SimpleNamespace(
+        id=31,
+        photo=None,
+        video=media,
+        audio=None,
+        document=None,
+        voice=None,
+        video_note=None,
+        animation=None,
+    )
+
+    class FakeClient:
+        async def get_messages(self, dialog_id, message_ids):
+            assert dialog_id == "-100123"
+            assert message_ids == 31
+            return message
+
+        async def download_media(self, message_arg, file_name, block):
+            assert message_arg is message
+            assert block is True
+            Path(file_name).write_bytes(b"video-data")
+            return file_name
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(manager, "get_client", fake_get_client)
+    path, media_type = await manager.get_message_media_file("-100123", 31)
+
+    assert path.read_bytes() == b"video-data"
+    assert path.suffix == ".mp4"
+    assert media_type == "video/mp4"
+
+
+@pytest.mark.asyncio
+async def test_list_dialog_messages_uses_before_id_for_older_page(tmp_path, monkeypatch):
+    manager = TelegramManager(settings=None, session_dir=tmp_path)
+    older = SimpleNamespace(
+        id=10,
+        date=None,
+        from_user=None,
+        sender_chat=SimpleNamespace(title="Channel"),
+        text="Older",
+        caption="",
+        media=None,
+    )
+
+    class FakeClient:
+        async def get_chat_history(self, dialog_id, limit, offset_id):
+            assert dialog_id == "-100123"
+            assert limit == 50
+            assert offset_id == 60
+            yield older
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(manager, "get_client", fake_get_client)
+    messages = await manager.list_dialog_messages("-100123", limit=50, before_id=60)
+
+    assert [message["id"] for message in messages] == [10]

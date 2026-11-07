@@ -53,6 +53,7 @@ class Database:
             date_from TEXT,
             date_to TEXT,
             download_filter TEXT NOT NULL DEFAULT '',
+            visible INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -85,6 +86,10 @@ class Database:
             if "download_filter" not in columns:
                 connection.execute(
                     "ALTER TABLE chats ADD COLUMN download_filter TEXT NOT NULL DEFAULT ''"
+                )
+            if "visible" not in columns:
+                connection.execute(
+                    "ALTER TABLE chats ADD COLUMN visible INTEGER NOT NULL DEFAULT 1"
                 )
 
     def get_setting(self, key: str, default: Any = None) -> Any:
@@ -128,7 +133,7 @@ class Database:
     def list_chats(self) -> list[dict[str, Any]]:
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM chats ORDER BY created_at ASC, id ASC"
+                "SELECT * FROM chats WHERE visible = 1 ORDER BY created_at ASC, id ASC"
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -158,6 +163,7 @@ class Database:
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_ref) DO UPDATE SET
                     title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE chats.title END,
+                    visible = 1,
                     date_from = excluded.date_from,
                     date_to = excluded.date_to,
                     download_filter = CASE
@@ -167,6 +173,26 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (chat_ref, title, date_from, date_to, download_filter, now, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM chats WHERE chat_ref = ?", (chat_ref,)
+            ).fetchone()
+        return dict(row)
+
+    def ensure_download_chat(self, chat_ref: str, title: str = "") -> dict[str, Any]:
+        now = utc_now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO chats(
+                    chat_ref, title, enabled, visible, created_at, updated_at
+                )
+                VALUES (?, ?, 0, 0, ?, ?)
+                ON CONFLICT(chat_ref) DO UPDATE SET
+                    title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE chats.title END,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_ref, title, now, now),
             )
             row = connection.execute(
                 "SELECT * FROM chats WHERE chat_ref = ?", (chat_ref,)
@@ -305,9 +331,22 @@ class Database:
                 f"UPDATE downloads SET {', '.join(fields)} WHERE id = ?", values
             )
 
-    def recent_downloads(self, limit: int = 100) -> list[dict[str, Any]]:
+    def get_download(self, download_id: int) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM downloads WHERE id = ?", (download_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def recent_downloads(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM downloads ORDER BY started_at DESC LIMIT ?", (limit,)
+                "SELECT * FROM downloads ORDER BY started_at DESC LIMIT ? OFFSET ?",
+                (limit, max(0, offset)),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def count_downloads(self) -> int:
+        with self._lock, self._connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM downloads").fetchone()
+        return int(row["count"])

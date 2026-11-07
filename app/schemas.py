@@ -180,6 +180,15 @@ class ChatUpdateRequest(BaseModel):
         return value
 
 
+class TelegramMediaDownloadRequest(BaseModel):
+    chat_title: str = Field(default="", max_length=256)
+
+    @field_validator("chat_title")
+    @classmethod
+    def strip_title(cls, value: str):
+        return value.strip()
+
+
 class FilterValidateRequest(BaseModel):
     expression: str = Field(default="", max_length=4000)
 

@@ -87,6 +87,50 @@
       <button class="rule-preset" type="button" data-rule-preset="message_date >= 2025.01.01">2025 年以后</button>
     </div>
 
+    <div class="rule-builder" id="rule-builder">
+      <div class="rule-builder-heading"><strong>点选生成规则</strong><button class="link-button" type="button" id="reset-rule-builder">清空条件</button></div>
+
+      <fieldset>
+        <legend>媒体类型 <small>不选择表示不限</small></legend>
+        <div class="check-grid" id="rule-media-types">
+          <label class="check-item"><input type="checkbox" value="video"> 视频</label>
+          <label class="check-item"><input type="checkbox" value="photo"> 图片</label>
+          <label class="check-item"><input type="checkbox" value="audio"> 音频</label>
+          <label class="check-item"><input type="checkbox" value="document"> 文档</label>
+          <label class="check-item"><input type="checkbox" value="voice"> 语音</label>
+          <label class="check-item"><input type="checkbox" value="video_note"> 视频消息</label>
+          <label class="check-item"><input type="checkbox" value="animation"> GIF / 动画</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>文件扩展名 <small>可多选</small></legend>
+        <div class="check-grid" id="rule-extensions">
+          <label class="check-item"><input type="checkbox" value="mp4"> MP4</label>
+          <label class="check-item"><input type="checkbox" value="mkv"> MKV</label>
+          <label class="check-item"><input type="checkbox" value="avi"> AVI</label>
+          <label class="check-item"><input type="checkbox" value="mp3"> MP3</label>
+          <label class="check-item"><input type="checkbox" value="flac"> FLAC</label>
+          <label class="check-item"><input type="checkbox" value="jpg"> JPG</label>
+          <label class="check-item"><input type="checkbox" value="png"> PNG</label>
+          <label class="check-item"><input type="checkbox" value="pdf"> PDF</label>
+          <label class="check-item"><input type="checkbox" value="epub"> EPUB</label>
+        </div>
+      </fieldset>
+
+      <div class="form-grid rule-builder-grid">
+        <label><span>文件名包含</span><input id="builder-file-name" type="text" placeholder="例如 1080p"></label>
+        <label><span>标题 / 描述包含</span><input id="builder-caption" type="text" placeholder="例如 电影"></label>
+        <label><span>最小文件大小</span><div class="input-with-unit"><input id="builder-size-min" type="number" min="0" step="any" placeholder="0"><select id="builder-size-min-unit"><option>MB</option><option>KB</option><option>GB</option><option>TB</option></select></div></label>
+        <label><span>最大文件大小</span><div class="input-with-unit"><input id="builder-size-max" type="number" min="0" step="any" placeholder="不限"><select id="builder-size-max-unit"><option>MB</option><option>GB</option><option>KB</option><option>TB</option></select></div></label>
+        <label><span>最小消息 ID</span><input id="builder-message-min" type="number" min="0" step="1" placeholder="不限"></label>
+        <label><span>最大消息 ID</span><input id="builder-message-max" type="number" min="0" step="1" placeholder="不限"></label>
+        <label><span>最低宽度</span><input id="builder-width" type="number" min="0" step="1" placeholder="例如 1920"></label>
+        <label><span>最低高度</span><input id="builder-height" type="number" min="0" step="1" placeholder="例如 1080"></label>
+        <label><span>最小时长（秒）</span><input id="builder-duration" type="number" min="0" step="1" placeholder="例如 60"></label>
+      </div>
+    </div>
+
     <label>
       <span>过滤表达式（留空则使用全局规则）</span>
       <textarea id="download-filter" rows="6" maxlength="4000" spellcheck="false" placeholder="例如：file_size >= 10MB and (caption == r'.*电影.*' or file_name == r'.*1080p.*')"></textarea>
@@ -121,7 +165,13 @@ let allDialogs = [];
 let currentChats = initialChats;
 let configuredRefs = new Set();
 let activeDialogId = null;
+let activeDialog = null;
 let messageRequestId = 0;
+let currentMessages = [];
+let oldestMessageId = null;
+let hasMoreMessages = true;
+let loadingOlderMessages = false;
+let messageObserver = null;
 let syncInProgress = false;
 
 function readDialogCache() {
@@ -256,6 +306,7 @@ function openRuleEditor(chatId) {
   const chat = currentChats.find((item) => item.id === chatId);
   if (!chat) return;
   document.getElementById('rule-chat-title').textContent = `${chat.title || chat.chat_ref} · ${chat.chat_ref}`;
+  resetRuleBuilder(false);
   document.getElementById('download-filter').value = chat.download_filter || '';
   document.getElementById('rule-date-from').value = chat.date_from || '';
   document.getElementById('rule-date-to').value = chat.date_to || '';
@@ -273,6 +324,64 @@ function setRuleValidation(message, state) {
   element.textContent = message;
   element.dataset.state = state;
   element.hidden = false;
+}
+
+function resetRuleBuilder(clearExpression = true) {
+  document.querySelectorAll('#rule-builder input[type="checkbox"]').forEach((input) => { input.checked = false; });
+  document.querySelectorAll('#rule-builder input[type="text"], #rule-builder input[type="number"], #rule-builder input[type="date"]').forEach((input) => { input.value = ''; });
+  document.getElementById('builder-size-min-unit').value = 'MB';
+  document.getElementById('builder-size-max-unit').value = 'MB';
+  if (clearExpression) document.getElementById('download-filter').value = '';
+}
+
+function escapeRuleText(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\async function validateCurrentRule() {').replace(/'/g, "\\'");
+}
+
+function selectedBuilderValues(selector) {
+  return [...document.querySelectorAll(`${selector} input:checked`)].map((input) => input.value);
+}
+
+function dateRuleValue(value) {
+  return value.replaceAll('-', '.');
+}
+
+function rebuildRuleFromControls() {
+  const clauses = [];
+  const mediaTypes = selectedBuilderValues('#rule-media-types');
+  if (mediaTypes.length) clauses.push(`media_type == r'(${mediaTypes.join('|')})'`);
+  const extensions = selectedBuilderValues('#rule-extensions');
+  if (extensions.length) clauses.push(`file_extension == r'(${extensions.join('|')})'`);
+
+  const fileName = document.getElementById('builder-file-name').value.trim();
+  if (fileName) clauses.push(`file_name == r'.*${escapeRuleText(fileName)}.*'`);
+  const caption = document.getElementById('builder-caption').value.trim();
+  if (caption) clauses.push(`caption == r'.*${escapeRuleText(caption)}.*'`);
+
+  const sizeMin = document.getElementById('builder-size-min').value;
+  if (sizeMin !== '') clauses.push(`file_size >= ${sizeMin}${document.getElementById('builder-size-min-unit').value}`);
+  const sizeMax = document.getElementById('builder-size-max').value;
+  if (sizeMax !== '') clauses.push(`file_size <= ${sizeMax}${document.getElementById('builder-size-max-unit').value}`);
+
+  const messageMin = document.getElementById('builder-message-min').value;
+  if (messageMin !== '') clauses.push(`message_id >= ${messageMin}`);
+  const messageMax = document.getElementById('builder-message-max').value;
+  if (messageMax !== '') clauses.push(`message_id <= ${messageMax}`);
+
+  const width = document.getElementById('builder-width').value;
+  if (width !== '') clauses.push(`media_width >= ${width}`);
+  const height = document.getElementById('builder-height').value;
+  if (height !== '') clauses.push(`media_height >= ${height}`);
+  const duration = document.getElementById('builder-duration').value;
+  if (duration !== '') clauses.push(`media_duration >= ${duration}`);
+
+  const dateFrom = document.getElementById('rule-date-from').value;
+  if (dateFrom) clauses.push(`message_date >= ${dateRuleValue(dateFrom)}`);
+  const dateTo = document.getElementById('rule-date-to').value;
+  if (dateTo) clauses.push(`message_date <= ${dateRuleValue(dateTo)}`);
+
+  document.getElementById('download-filter').value = clauses.join(' and ');
+  setRuleValidation(clauses.length ? '已根据点选条件生成表达式' : '未选择过滤条件', clauses.length ? 'success' : '');
 }
 
 async function validateCurrentRule() {
@@ -316,54 +425,135 @@ function formatMessageDate(value) {
   });
 }
 
-function renderMessages(messages) {
+function renderMessages(messages, { scrollToBottom = true, preserve = null } = {}) {
   const container = document.getElementById('dialog-messages');
   if (!messages.length) {
     container.innerHTML = '<p class="empty-state">这个会话暂时没有可显示的消息</p>';
     return;
   }
-  container.innerHTML = messages.map((message) => {
+  container.innerHTML = '<button class="message-load-older" id="message-history-sentinel" type="button" data-load-older>加载更早的 50 条</button>' + messages.map((message) => {
     const media = message.media_label
       ? `<span class="tag tag-downloading">${TMD.escape(message.media_label)}</span>`
       : '';
     const mediaName = message.media_name
       ? `<span class="message-media-name">${TMD.escape(message.media_name)}</span>`
       : '';
+    let preview = '';
+    if (message.preview_url && ['photo', 'video'].includes(message.media_type)) {
+      const source = TMD.escape(message.preview_url);
+      preview = message.media_type === 'photo'
+        ? `<div class="message-media-preview"><img src="${source}" alt="${TMD.escape(message.media_name || '图片')}" loading="lazy"></div>`
+        : `<div class="message-media-preview"><video controls preload="metadata" src="${source}"></video></div>`;
+    }
+    const saveButton = message.has_media
+      ? `<button class="message-save-button" type="button" data-save-message="${message.id}" data-media-type="${TMD.escape(message.media_type)}">保存到 downloads/群名</button>`
+      : '';
     return `<article class="message-item">
       <header><strong>${TMD.escape(message.sender || '匿名用户')}</strong><time datetime="${TMD.escape(message.date)}">${TMD.escape(formatMessageDate(message.date))}</time></header>
       <p>${TMD.escape(message.text)}</p>
+      ${preview}
       ${media || mediaName ? `<footer>${media}${mediaName}</footer>` : ''}
+      ${saveButton ? `<div class="message-actions">${saveButton}<small>保存路径：downloads/频道名称/文件名</small></div>` : ''}
     </article>`;
   }).join('');
-  requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
+  observeMessageSentinel();
+  requestAnimationFrame(() => {
+    if (preserve) {
+      container.scrollTop = container.scrollHeight - preserve.height + preserve.top;
+    } else if (scrollToBottom) {
+      container.scrollTop = container.scrollHeight;
+    }
+  });
 }
 
-async function loadDialogMessages(dialog) {
-  activeDialogId = dialog.id;
-  document.querySelectorAll('#dialog-list .dialog-row').forEach((row) => {
-    row.classList.toggle('is-active', row.dataset.dialogId === dialog.id);
-  });
-  document.getElementById('dialog-preview-empty').hidden = true;
-  document.getElementById('dialog-preview-content').hidden = false;
-  document.getElementById('preview-title').textContent = dialog.title;
-  document.getElementById('preview-meta').textContent = `${dialogRef(dialog)} · ${typeLabel(dialog.type)}`;
-  setPreviewAvatar(dialog);
+function observeMessageSentinel() {
+  const sentinel = document.getElementById('message-history-sentinel');
   const container = document.getElementById('dialog-messages');
-  container.innerHTML = '<p class="empty-state">正在加载最近消息…</p>';
+  if (!sentinel) return;
+  if (messageObserver) messageObserver.disconnect();
+  if (!('IntersectionObserver' in window)) return;
+  messageObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting) && activeDialog) {
+      loadDialogMessages(activeDialog, { appendOlder: true });
+    }
+  }, { root: container, rootMargin: '120px 0px 0px 0px', threshold: 0 });
+  messageObserver.observe(sentinel);
+}
+
+function mergeMessages(older, current) {
+  const byId = new Map();
+  [...older, ...current].forEach((message) => byId.set(Number(message.id), message));
+  return [...byId.values()].sort((left, right) => Number(left.id) - Number(right.id));
+}
+
+async function loadDialogMessages(dialog, { appendOlder = false } = {}) {
+  if (appendOlder && (!activeDialog || loadingOlderMessages || !hasMoreMessages)) return;
+  if (!appendOlder) {
+    activeDialogId = dialog.id;
+    activeDialog = dialog;
+    currentMessages = [];
+    oldestMessageId = null;
+    hasMoreMessages = true;
+    loadingOlderMessages = false;
+    document.querySelectorAll('#dialog-list .dialog-row').forEach((row) => {
+      row.classList.toggle('is-active', row.dataset.dialogId === dialog.id);
+    });
+    document.getElementById('dialog-preview-empty').hidden = true;
+    document.getElementById('dialog-preview-content').hidden = false;
+    document.getElementById('preview-title').textContent = dialog.title;
+    document.getElementById('preview-meta').textContent = `${dialogRef(dialog)} · ${typeLabel(dialog.type)}`;
+    setPreviewAvatar(dialog);
+  }
+  const container = document.getElementById('dialog-messages');
+  const preserve = appendOlder
+    ? { height: container.scrollHeight, top: container.scrollTop }
+    : null;
+  if (!appendOlder) container.innerHTML = '<p class="empty-state">正在加载最近消息…</p>';
+  const pageSize = appendOlder ? 50 : 30;
   const requestId = ++messageRequestId;
+  if (appendOlder) {
+    loadingOlderMessages = true;
+    container.setAttribute('aria-busy', 'true');
+  }
   try {
-    const messages = await TMD.api(`/api/telegram/dialogs/${encodeURIComponent(dialog.id)}/messages?limit=30`);
+    const beforeQuery = appendOlder && oldestMessageId
+      ? `&before_id=${encodeURIComponent(oldestMessageId)}`
+      : '';
+    const messages = await TMD.api(`/api/telegram/dialogs/${encodeURIComponent(dialog.id)}/messages?limit=${pageSize}${beforeQuery}`);
     if (requestId !== messageRequestId) return;
-    renderMessages(messages);
+    if (appendOlder) {
+      currentMessages = mergeMessages(messages, currentMessages);
+    } else {
+      currentMessages = mergeMessages(messages, []);
+    }
+    oldestMessageId = currentMessages.length ? currentMessages[0].id : null;
+    hasMoreMessages = messages.length >= pageSize;
+    renderMessages(currentMessages, { scrollToBottom: !appendOlder, preserve });
   } catch (err) {
     if (requestId !== messageRequestId) return;
-    container.innerHTML = `<p class="empty-state">消息加载失败：${TMD.escape(err.message)}</p>`;
+    if (!appendOlder) {
+      container.innerHTML = `<p class="empty-state">消息加载失败：${TMD.escape(err.message)}</p>`;
+    }
     TMD.toast(err.message, 'error');
+  } finally {
+    if (appendOlder) {
+      loadingOlderMessages = false;
+      container.removeAttribute('aria-busy');
+    }
   }
 }
 
 function closeDialogPreview() {
   activeDialogId = null;
+  activeDialog = null;
+  currentMessages = [];
+  oldestMessageId = null;
+  hasMoreMessages = true;
+  loadingOlderMessages = false;
+  if (messageObserver) {
+    messageObserver.disconnect();
+    messageObserver = null;
+  }
   messageRequestId += 1;
   document.querySelectorAll('#dialog-list .dialog-row.is-active').forEach((row) => row.classList.remove('is-active'));
   document.getElementById('dialog-preview-empty').hidden = false;
@@ -417,7 +607,36 @@ document.getElementById('dialog-list').addEventListener('click', (event) => {
   const dialog = allDialogs.find((item) => item.id === button.dataset.openDialog);
   if (dialog) loadDialogMessages(dialog);
 });
+document.getElementById('dialog-messages').addEventListener('scroll', (event) => {
+  if (event.currentTarget.scrollTop <= 48 && activeDialog) {
+    loadDialogMessages(activeDialog, { appendOlder: true });
+  }
+});
 document.getElementById('close-dialog-preview').addEventListener('click', closeDialogPreview);
+document.getElementById('dialog-messages').addEventListener('click', async (event) => {
+  const olderButton = event.target.closest('[data-load-older]');
+  if (olderButton && activeDialog) {
+    await loadDialogMessages(activeDialog, { appendOlder: true });
+    return;
+  }
+  const button = event.target.closest('[data-save-message]');
+  if (!button || !activeDialog) return;
+  button.disabled = true;
+  button.textContent = '正在加入下载…';
+  try {
+    const result = await TMD.api(`/api/telegram/dialogs/${encodeURIComponent(activeDialog.id)}/messages/${button.dataset.saveMessage}/download`, {
+      method: 'POST',
+      body: { chat_title: activeDialog.title }
+    });
+    TMD.toast(`已加入下载：${result.chat_title}/${result.file_name}`, 'success');
+    button.textContent = '已加入下载';
+  } catch (err) {
+    button.disabled = false;
+    button.textContent = '保存到 downloads/群名';
+    TMD.toast(err.message, 'error');
+  }
+});
+
 document.getElementById('add-selected').addEventListener('click', async (event) => {
   const button = event.currentTarget;
   const refs = [...document.querySelectorAll('#dialog-list input[type="checkbox"]:checked:not(:disabled)')].map((input) => input.value);
@@ -477,6 +696,13 @@ document.querySelectorAll('[data-rule-preset]').forEach((button) => {
     setRuleValidation('示例已填入，可继续修改', 'success');
   });
 });
+document.querySelectorAll('#rule-builder input, #rule-builder select, #rule-builder #rule-date-from, #rule-builder #rule-date-to').forEach((control) => {
+  control.addEventListener('input', rebuildRuleFromControls);
+  control.addEventListener('change', rebuildRuleFromControls);
+});
+document.getElementById('rule-date-from').addEventListener('input', rebuildRuleFromControls);
+document.getElementById('rule-date-to').addEventListener('input', rebuildRuleFromControls);
+document.getElementById('reset-rule-builder').addEventListener('click', () => resetRuleBuilder(true));
 document.getElementById('validate-rule').addEventListener('click', validateCurrentRule);
 document.getElementById('close-rule-dialog').addEventListener('click', () => {
   const dialog = document.getElementById('rule-dialog');

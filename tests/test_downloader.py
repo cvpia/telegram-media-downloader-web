@@ -10,6 +10,7 @@ import pytest
 from app.downloader import (
     DownloaderService,
     build_destination,
+    build_group_destination,
     detect_media,
     format_is_allowed,
     media_extension,
@@ -194,3 +195,39 @@ async def test_channel_filter_skips_non_matching_media(tmp_path: Path, monkeypat
 
 async def _async_value(value):
     return value
+
+
+def test_build_group_destination_uses_chat_folder_and_original_name(tmp_path: Path):
+    message = SimpleNamespace(id=12, date=datetime(2025, 1, 1, tzinfo=UTC))
+    media = SimpleNamespace(mime_type="video/mp4")
+    destination = build_group_destination(
+        tmp_path,
+        "Demo: Channel",
+        "video",
+        media,
+        "movie.mp4",
+    )
+    assert destination.parent == tmp_path / "Demo_ Channel"
+    assert destination.name == "movie.mp4"
+
+
+def test_downloader_history_page_uses_offset_and_total(tmp_path: Path):
+    calls = []
+    database = SimpleNamespace(
+        count_downloads=lambda: 37,
+        recent_downloads=lambda limit, offset=0: calls.append((limit, offset)) or [],
+        list_chats=lambda: [],
+    )
+    settings = SimpleNamespace(download_dir=lambda: tmp_path)
+    service = DownloaderService(database, settings, telegram=None)
+
+    page = service.history_page(page=3, page_size=10)
+
+    assert page == {
+        "items": [],
+        "total": 37,
+        "page": 3,
+        "page_size": 10,
+        "pages": 4,
+    }
+    assert calls == [(10, 20)]

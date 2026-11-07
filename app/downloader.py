@@ -137,6 +137,23 @@ def build_destination(
     return safe_destination(root, parts, f"{rendered}{extension}")
 
 
+def build_group_destination(
+    root: Path,
+    chat_title: str,
+    media_type: str,
+    message: Any,
+    file_name: str | None,
+) -> Path:
+    extension = media_extension(media_type, message, file_name)
+    original_name = file_name or f"{media_type}_{message.id}{extension}"
+    original_path = Path(original_name)
+    stem = original_path.stem or f"{media_type}_{message.id}"
+    clean_name = sanitize_component(
+        f"{stem}{extension}", fallback=f"{getattr(message, 'id', 'file')}{extension}"
+    )
+    return safe_destination(root, [chat_title or "unknown_chat"], clean_name)
+
+
 class DownloaderService:
     def __init__(
         self,
@@ -153,6 +170,7 @@ class DownloaderService:
         self._task: asyncio.Task[None] | None = None
         self._active: dict[int, dict[str, Any]] = {}
         self._active_lock = asyncio.Lock()
+        self._direct_tasks: set[asyncio.Task[None]] = set()
 
     @staticmethod
     def _active_snapshot(item: dict[str, Any], now: float | None = None) -> dict[str, Any]:
@@ -240,6 +258,22 @@ class DownloaderService:
             "resource": self._resource_snapshot(),
         }
 
+    def history_page(self, page: int = 1, page_size: int = 10) -> dict[str, Any]:
+        page_size = max(1, min(int(page_size), 50))
+        total = self.database.count_downloads()
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = max(1, min(int(page), pages))
+        items = self.database.recent_downloads(
+            page_size, offset=(page - 1) * page_size
+        )
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": pages,
+        }
+
     async def start(self) -> dict[str, Any]:
         if self._task and not self._task.done():
             return self.snapshot()
@@ -277,6 +311,10 @@ class DownloaderService:
         return self.snapshot()
 
     async def close(self) -> None:
+        for task in list(self._direct_tasks):
+            task.cancel()
+        if self._direct_tasks:
+            await asyncio.gather(*self._direct_tasks, return_exceptions=True)
         await self.stop()
 
     async def _run(self) -> None:
@@ -301,6 +339,90 @@ class DownloaderService:
         finally:
             self.current_chat = None
             self._active.clear()
+
+    async def start_direct_download(
+        self,
+        dialog_id: str,
+        message_id: int,
+        chat_title: str = "",
+    ) -> dict[str, Any]:
+        client = await self.telegram.get_client()
+        message = await client.get_messages(dialog_id, message_ids=message_id)
+        if isinstance(message, list):
+            message = message[0] if message else None
+        if message is None:
+            raise ValueError("消息不存在或已被删除")
+        detected = detect_media(message)
+        if detected is None:
+            raise ValueError("该消息不包含可下载媒体")
+        media_type, media = detected
+        file_name = getattr(media, "file_name", None)
+        resolved_title = (
+            chat_title
+            or getattr(getattr(message, "chat", None), "title", None)
+            or getattr(getattr(message, "chat", None), "username", None)
+            or str(dialog_id)
+        )
+        hidden_chat = self.database.ensure_download_chat(
+            str(dialog_id), str(resolved_title)
+        )
+        destination = build_group_destination(
+            self.settings.download_dir(),
+            str(resolved_title),
+            media_type,
+            message,
+            file_name,
+        )
+        task = asyncio.create_task(
+            self._run_direct_download(
+                message=message,
+                media=media,
+                media_type=media_type,
+                file_name=file_name,
+                chat_id=int(hidden_chat["id"]),
+                chat_title=str(resolved_title),
+                destination=destination,
+            ),
+            name=f"telegram-direct-download-{message_id}",
+        )
+        self._direct_tasks.add(task)
+        task.add_done_callback(self._direct_tasks.discard)
+        return {
+            "ok": True,
+            "status": "queued",
+            "message_id": message_id,
+            "media_type": media_type,
+            "chat_title": str(resolved_title),
+            "file_name": destination.name,
+            "relative_path": str(destination.relative_to(self.settings.download_dir())),
+        }
+
+    async def _run_direct_download(
+        self,
+        *,
+        message: Any,
+        media: Any,
+        media_type: str,
+        file_name: str | None,
+        chat_id: int,
+        chat_title: str,
+        destination: Path,
+    ) -> None:
+        try:
+            await self._download_message(
+                message=message,
+                media=media,
+                media_type=media_type,
+                file_name=file_name,
+                chat_id=chat_id,
+                chat_title=chat_title,
+                destination_override=destination,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Direct download failed")
+            self.last_error = f"{chat_title} / {message.id}: {exc}"
 
     async def _wait_if_paused(self) -> None:
         while self.state == "paused":
@@ -389,8 +511,9 @@ class DownloaderService:
         file_name: str | None,
         chat_id: int,
         chat_title: str,
+        destination_override: Path | None = None,
     ) -> bool:
-        destination = build_destination(
+        destination = destination_override or build_destination(
             self.settings.download_dir(),
             self.settings.folder_parts(),
             self.settings.filename_template(),

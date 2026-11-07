@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
+    Body,
     Depends,
     FastAPI,
     File,
@@ -19,6 +22,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     PlainTextResponse,
     RedirectResponse,
@@ -45,6 +49,7 @@ from app.schemas import (
     SettingsUpdate,
     TelegramCodeRequest,
     TelegramLoginStartRequest,
+    TelegramMediaDownloadRequest,
     TelegramPasswordRequest,
 )
 from app.security import (
@@ -381,10 +386,48 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         dialog_id: str,
         request: Request,
         limit: int = 30,
+        before_id: int | None = None,
     ) -> list[dict[str, Any]]:
         try:
-            return await service_container(request).telegram.list_dialog_messages(
-                dialog_id, limit
+            telegram = service_container(request).telegram
+            if before_id is None:
+                return await telegram.list_dialog_messages(dialog_id, limit)
+            return await telegram.list_dialog_messages(dialog_id, limit, before_id)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get(
+        "/api/telegram/dialogs/{dialog_id}/messages/{message_id}/media",
+        dependencies=[Depends(require_admin)],
+    )
+    async def telegram_message_media(
+        dialog_id: str, message_id: int, request: Request
+    ) -> FileResponse:
+        try:
+            path, media_type = await service_container(request).telegram.get_message_media_file(
+                dialog_id, message_id
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type=media_type,
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
+    @app.post(
+        "/api/telegram/dialogs/{dialog_id}/messages/{message_id}/download",
+        dependencies=[Depends(require_admin), Depends(csrf_header)],
+    )
+    async def download_telegram_message(
+        dialog_id: str,
+        message_id: int,
+        request: Request,
+    ) -> dict[str, Any]:
+        try:
+            payload = TelegramMediaDownloadRequest.model_validate(await request.json())
+            return await service_container(request).downloader.start_direct_download(
+                dialog_id, message_id, payload.chat_title
             )
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -498,6 +541,38 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         if not deleted:
             raise HTTPException(status_code=404, detail="频道不存在")
         return {"ok": True}
+
+    @app.get("/api/downloads/history", dependencies=[Depends(require_admin)])
+    async def download_history(
+        request: Request, page: int = 1, page_size: int = 10
+    ) -> dict[str, Any]:
+        return service_container(request).downloader.history_page(page, page_size)
+
+    @app.get(
+        "/api/downloads/{download_id}/media",
+        dependencies=[Depends(require_admin)],
+    )
+    async def download_media(download_id: int, request: Request) -> FileResponse:
+        services = service_container(request)
+        record = services.database.get_download(download_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="下载记录不存在")
+        if record.get("status") not in {"completed", "skipped"}:
+            raise HTTPException(status_code=409, detail="文件尚未下载完成")
+        root = services.settings.download_dir().resolve()
+        path = Path(str(record.get("file_name", ""))).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="文件路径无效") from exc
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="本地文件不存在")
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return FileResponse(
+            path,
+            media_type=media_type,
+            headers={"Content-Disposition": "inline"},
+        )
 
     @app.get("/api/downloads/status", dependencies=[Depends(require_admin)])
     async def download_status(request: Request) -> dict[str, Any]:
