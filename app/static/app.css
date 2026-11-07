@@ -354,6 +354,7 @@ code { padding: 2px 6px; border-radius: 6px; background: rgba(0, 0, 0, 0.05); co
 .message-load-older { display: block; width: 100%; min-height: 36px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.8); color: var(--primary); font-size: .72rem; font-weight: 600; cursor: pointer; }
 .message-load-older:hover { border-color: rgba(0,113,227,.2); background: var(--primary-soft); }
 .message-load-older:disabled { color: var(--muted); cursor: wait; }
+.message-load-older.is-error { border-color: rgba(255,59,48,.2); background: rgba(255,59,48,.06); color: var(--danger); }
 .message-history-end { margin: 2px 0 8px; color: var(--muted); font-size: .7rem; text-align: center; }
 .loading-spinner { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border: 2px solid rgba(0,113,227,.18); border-top-color: var(--primary); border-radius: 50%; vertical-align: -2px; animation: message-spin .7s linear infinite; }
 @keyframes message-spin { to { transform: rotate(360deg); } }
@@ -362,6 +363,9 @@ code { padding: 2px 6px; border-radius: 6px; background: rgba(0, 0, 0, 0.05); co
 .message-skeleton { display: block; height: 74px; border-radius: 14px; background: linear-gradient(100deg, rgba(255,255,255,.6) 20%, rgba(255,255,255,.96) 45%, rgba(255,255,255,.6) 70%); background-size: 220% 100%; animation: message-shimmer 1.25s ease-in-out infinite; }
 .message-skeleton-short { height: 52px; }
 @keyframes message-shimmer { to { background-position: -220% 0; } }
+.message-load-error { display: grid; gap: 12px; padding: 28px 16px; color: var(--danger); text-align: center; }
+.message-load-error p { margin: 0; font-size: .78rem; }
+.message-load-error button { justify-self: center; padding: 7px 13px; border: 1px solid rgba(0,113,227,.16); border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: .72rem; font-weight: 600; cursor: pointer; }
 .message-list { display: grid; min-height: 0; flex: 1; align-content: start; gap: 9px; overflow-y: auto; padding: 14px; }
 .message-item { padding: 11px 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255, 255, 255, .82); }
 .message-item header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }

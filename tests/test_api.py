@@ -145,6 +145,20 @@ def test_chat_crud(client: TestClient):
     assert response.status_code == 200
     assert response.json()["enabled"] == 0
 
+    response = client.patch(
+        f"/api/chats/{chat['id']}",
+        json={
+            "download_filter": "media_type == 'video'",
+            "date_from": "2025-02-01",
+            "date_to": "2025-11-30",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["download_filter"] == "media_type == 'video'"
+    assert response.json()["date_from"] == "2025-02-01"
+    assert response.json()["date_to"] == "2025-11-30"
+
     chats = client.get("/api/chats").json()
     assert len(chats) == 1
 
@@ -224,6 +238,10 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert "IntersectionObserver" in chats_page.text
     assert "rootMargin: '280px 0px 0px 0px'" in chats_page.text
     assert "messageCache" in chats_page.text
+    assert "olderLoadFailed" in chats_page.text
+    assert "data-retry-messages" in chats_page.text
+    assert "timeoutMs: 30000" in chats_page.text
+    assert "timeoutMs: 15000" in chats_page.text
     assert 'id="sync-state"' in chats_page.text
     assert "tmd:dialogs:v2" in chats_page.text
     assert "localStorage" in chats_page.text

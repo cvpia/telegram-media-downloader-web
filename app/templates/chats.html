@@ -173,6 +173,7 @@ let oldestMessageId = null;
 let hasMoreMessages = true;
 let loadingOlderMessages = false;
 let loadingRecentMessages = false;
+let olderLoadFailed = false;
 let olderLoadScheduled = false;
 let messageObserver = null;
 let syncInProgress = false;
@@ -402,7 +403,7 @@ async function validateCurrentRule() {
 }
 
 async function refreshChats() {
-  const chats = await TMD.api('/api/chats');
+  const chats = await TMD.api('/api/chats', { timeoutMs: 10000 });
   renderChats(chats);
 }
 
@@ -459,6 +460,9 @@ function renderMessageLoading(container) {
 }
 
 function historyMarker() {
+  if (olderLoadFailed && hasMoreMessages) {
+    return '<button class="message-load-older is-error" id="message-history-sentinel" type="button" data-load-older>更早消息加载失败 · 点击重试</button>';
+  }
   if (!hasMoreMessages) {
     return '<div class="message-history-end" id="message-history-sentinel">已加载全部消息</div>';
   }
@@ -513,6 +517,11 @@ function renderMessages(messages, { scrollToBottom = true, preserve = null } = {
 function updateOlderHistoryMarker() {
   const sentinel = document.getElementById('message-history-sentinel');
   if (!sentinel || !hasMoreMessages) return;
+  if (olderLoadFailed) {
+    sentinel.disabled = false;
+    sentinel.innerHTML = '更早消息加载失败 · 点击重试';
+    return;
+  }
   sentinel.disabled = loadingOlderMessages;
   sentinel.innerHTML = loadingOlderMessages
     ? '<span class="loading-spinner" aria-hidden="true"></span>正在加载更早消息…'
@@ -526,6 +535,7 @@ function queueOlderMessagesLoad() {
     olderLoadScheduled = false;
     const container = document.getElementById('dialog-messages');
     if (!activeDialog || loadingRecentMessages || loadingOlderMessages || !hasMoreMessages) return;
+    if (olderLoadFailed) return;
     if (container.scrollTop <= 120) {
       loadDialogMessages(activeDialog, { appendOlder: true });
     }
@@ -550,8 +560,8 @@ function mergeMessages(older, current) {
   return [...byId.values()].sort((left, right) => Number(left.id) - Number(right.id));
 }
 
-async function loadDialogMessages(dialog, { appendOlder = false } = {}) {
-  if (appendOlder && (!activeDialog || loadingRecentMessages || loadingOlderMessages || !hasMoreMessages)) return;
+async function loadDialogMessages(dialog, { appendOlder = false, retryOlder = false } = {}) {
+  if (appendOlder && (!activeDialog || loadingRecentMessages || loadingOlderMessages || !hasMoreMessages || (olderLoadFailed && !retryOlder))) return;
   const container = document.getElementById('dialog-messages');
   let cached = null;
   if (!appendOlder) {
@@ -564,6 +574,7 @@ async function loadDialogMessages(dialog, { appendOlder = false } = {}) {
     hasMoreMessages = cached?.hasMoreMessages ?? true;
     loadingOlderMessages = false;
     loadingRecentMessages = true;
+    olderLoadFailed = false;
     document.querySelectorAll('#dialog-list .dialog-row').forEach((row) => {
       row.classList.toggle('is-active', row.dataset.dialogId === dialog.id);
     });
@@ -585,6 +596,7 @@ async function loadDialogMessages(dialog, { appendOlder = false } = {}) {
   const pageSize = appendOlder ? 50 : 30;
   const requestId = ++messageRequestId;
   if (appendOlder) {
+    olderLoadFailed = false;
     loadingOlderMessages = true;
     updateOlderHistoryMarker();
     container.setAttribute('aria-busy', 'true');
@@ -593,7 +605,7 @@ async function loadDialogMessages(dialog, { appendOlder = false } = {}) {
     const beforeQuery = appendOlder && oldestMessageId
       ? `&before_id=${encodeURIComponent(oldestMessageId)}`
       : '';
-    const messages = await TMD.api(`/api/telegram/dialogs/${encodeURIComponent(dialog.id)}/messages?limit=${pageSize}${beforeQuery}`);
+    const messages = await TMD.api(`/api/telegram/dialogs/${encodeURIComponent(dialog.id)}/messages?limit=${pageSize}${beforeQuery}`, { timeoutMs: 30000 });
     if (requestId !== messageRequestId) return;
     if (appendOlder) {
       currentMessages = mergeMessages(messages, currentMessages);
@@ -604,12 +616,18 @@ async function loadDialogMessages(dialog, { appendOlder = false } = {}) {
     }
     oldestMessageId = currentMessages.length ? currentMessages[0].id : null;
     hasMoreMessages = messages.length >= pageSize;
+    olderLoadFailed = false;
     writeMessageCache(dialog.id);
     renderMessages(currentMessages, { scrollToBottom: !appendOlder, preserve });
   } catch (err) {
     if (requestId !== messageRequestId) return;
-    if (!currentMessages.length) {
-      container.innerHTML = `<p class="empty-state">消息加载失败：${TMD.escape(err.message)}</p>`;
+    if (appendOlder) {
+      olderLoadFailed = true;
+      TMD.toast(`更早消息加载失败：${err.message}`, 'error');
+    } else if (!currentMessages.length) {
+      olderLoadFailed = true;
+      hasMoreMessages = false;
+      container.innerHTML = `<div class="message-load-error"><p>消息加载失败：${TMD.escape(err.message)}</p><button type="button" data-retry-messages>重新加载</button></div>`;
     } else {
       TMD.toast(`刷新消息失败，继续显示本地缓存：${err.message}`, 'error');
     }
@@ -635,6 +653,7 @@ function closeDialogPreview() {
   hasMoreMessages = true;
   loadingOlderMessages = false;
   loadingRecentMessages = false;
+  olderLoadFailed = false;
   olderLoadScheduled = false;
   if (messageObserver) {
     messageObserver.disconnect();
@@ -699,9 +718,14 @@ document.getElementById('dialog-messages').addEventListener('scroll', (event) =>
 });
 document.getElementById('close-dialog-preview').addEventListener('click', closeDialogPreview);
 document.getElementById('dialog-messages').addEventListener('click', async (event) => {
+  const retryMessages = event.target.closest('[data-retry-messages]');
+  if (retryMessages && activeDialog) {
+    await loadDialogMessages(activeDialog);
+    return;
+  }
   const olderButton = event.target.closest('[data-load-older]');
   if (olderButton && activeDialog) {
-    await loadDialogMessages(activeDialog, { appendOlder: true });
+    await loadDialogMessages(activeDialog, { appendOlder: true, retryOlder: true });
     return;
   }
   const button = event.target.closest('[data-save-message]');
@@ -802,22 +826,31 @@ document.getElementById('rule-form').addEventListener('submit', async (event) =>
   const dialog = document.getElementById('rule-dialog');
   const chatId = Number(dialog.dataset.chatId);
   const button = event.currentTarget.querySelector('button[type="submit"]');
+  const originalText = button.textContent;
   button.disabled = true;
+  button.textContent = '保存中…';
+  setRuleValidation('正在保存规则…', 'loading');
   try {
-    await TMD.api(`/api/chats/${chatId}`, {
+    const savedChat = await TMD.api(`/api/chats/${chatId}`, {
       method: 'PATCH',
       body: {
         download_filter: document.getElementById('download-filter').value.trim(),
         date_from: document.getElementById('rule-date-from').value || null,
         date_to: document.getElementById('rule-date-to').value || null
-      }
+      },
+      timeoutMs: 15000
     });
+    currentChats = currentChats.map((chat) => chat.id === savedChat.id ? { ...chat, ...savedChat } : chat);
+    renderChats(currentChats);
     dialog.close();
-    await refreshChats();
     TMD.toast('频道下载规则已保存', 'success');
+    refreshChats().catch((err) => TMD.toast(`规则已保存，列表刷新失败：${err.message}`, 'error'));
   } catch (err) {
     setRuleValidation(err.message, 'error');
-  } finally { button.disabled = false; }
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
 });
 
 renderChats(initialChats);

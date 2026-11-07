@@ -11,6 +11,9 @@
   async function api(url, options = {}) {
     const method = (options.method || 'GET').toUpperCase();
     const headers = new Headers(options.headers || {});
+    const timeoutMs = Number(options.timeoutMs || 0);
+    const controller = timeoutMs > 0 ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let body = options.body;
     if (body !== undefined && body !== null && !(body instanceof FormData)) {
       headers.set('Content-Type', 'application/json');
@@ -19,27 +22,35 @@
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
       headers.set('X-CSRF-Token', csrfToken);
     }
-    const response = await fetch(url, {
-      method,
-      headers,
-      body,
-      credentials: 'same-origin',
-      cache: 'no-store'
-    });
-    if (response.status === 401) {
-      if (!['/login', '/setup'].includes(window.location.pathname)) window.location.href = '/login';
-      throw new Error('登录状态已失效');
-    }
-    const contentType = response.headers.get('content-type') || '';
-    const payload = contentType.includes('application/json') ? await response.json() : await response.text();
-    if (!response.ok) {
-      let message = payload?.detail || payload || `请求失败 (${response.status})`;
-      if (Array.isArray(message)) {
-        message = message.map((item) => item.msg || JSON.stringify(item)).join('；');
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body,
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: controller?.signal
+      });
+      if (response.status === 401) {
+        if (!['/login', '/setup'].includes(window.location.pathname)) window.location.href = '/login';
+        throw new Error('登录状态已失效');
       }
-      throw new Error(String(message));
+      const contentType = response.headers.get('content-type') || '';
+      const payload = contentType.includes('application/json') ? await response.json() : await response.text();
+      if (!response.ok) {
+        let message = payload?.detail || payload || `请求失败 (${response.status})`;
+        if (Array.isArray(message)) {
+          message = message.map((item) => item.msg || JSON.stringify(item)).join('；');
+        }
+        throw new Error(String(message));
+      }
+      return payload;
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error('请求超时，请稍后重试');
+      throw error;
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
     }
-    return payload;
   }
 
   function toast(message, type = 'info') {
