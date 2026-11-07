@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ from urllib.parse import unquote, urlparse
 
 from pyrogram import Client
 from pyrogram.errors import (
+    BadMsgNotification,
     FloodWait,
     PasswordHashInvalid,
     PhoneCodeExpired,
@@ -19,6 +21,9 @@ from pyrogram.errors import (
 )
 
 from app.settings_service import SettingsService
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -76,6 +81,44 @@ class TelegramManager:
             sleep_threshold=10,
         )
 
+    @staticmethod
+    def is_clock_sync_error(exception: BadMsgNotification) -> bool:
+        message = str(exception)
+        return any(code in message for code in ("[16]", "[17]", "[20]"))
+
+    async def _send_login_code(
+        self,
+        client_name: str,
+        phone_number: str,
+        api_id: int,
+        api_hash: str,
+    ):
+        last_error: BadMsgNotification | None = None
+        for attempt in range(2):
+            client = self._new_client(client_name, api_id, api_hash)
+            await client.connect()
+            try:
+                return client, await client.send_code(phone_number)
+            except BadMsgNotification as exc:
+                last_error = exc
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                if attempt == 0 and self.is_clock_sync_error(exc):
+                    logger.warning("Telegram clock sync mismatch; retrying send_code once")
+                    await asyncio.sleep(0.5)
+                    continue
+                break
+            except Exception:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                raise
+        raise ValueError(
+            "Telegram 客户端与服务器时间不同步。请同步 Windows 系统时间后重试"
+        ) from last_error
     async def start_login(self, phone_number: str) -> dict[str, Any]:
         api_id, api_hash = self.settings.get_loader_credentials()
         if not api_id or not api_hash:
@@ -84,9 +127,9 @@ class TelegramManager:
         await self._discard_pending()
 
         login_id = secrets.token_urlsafe(18)
-        client = self._new_client(f"login_{login_id}", api_id, api_hash)
-        await client.connect()
-        sent_code = await client.send_code(phone_number)
+        client, sent_code = await self._send_login_code(
+            f"login_{login_id}", phone_number, api_id, api_hash
+        )
         record = PendingLogin(
             login_id=login_id,
             client=client,
@@ -118,6 +161,12 @@ class TelegramManager:
             raise ValueError("验证码已过期，请重新发送") from exc
         except FloodWait as exc:
             raise ValueError(f"操作过于频繁，请等待 {exc.value} 秒") from exc
+        except BadMsgNotification as exc:
+            if self.is_clock_sync_error(exc):
+                raise ValueError(
+                    "Telegram 客户端与服务器时间不同步，请同步 Windows 系统时间后重试"
+                ) from exc
+            raise
 
         return await self._finish_login(record)
 
@@ -129,6 +178,12 @@ class TelegramManager:
             await record.client.check_password(password)
         except PasswordHashInvalid as exc:
             raise ValueError("两步验证密码错误") from exc
+        except BadMsgNotification as exc:
+            if self.is_clock_sync_error(exc):
+                raise ValueError(
+                    "Telegram 客户端与服务器时间不同步，请同步 Windows 系统时间后重试"
+                ) from exc
+            raise
         return await self._finish_login(record)
 
     async def _finish_login(self, record: PendingLogin) -> dict[str, Any]:
