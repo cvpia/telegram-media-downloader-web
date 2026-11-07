@@ -397,6 +397,25 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get(
+        "/api/telegram/dialogs/{dialog_id}/messages/{message_id}/thumbnail",
+        dependencies=[Depends(require_admin)],
+    )
+    async def telegram_message_thumbnail(
+        dialog_id: str, message_id: int, request: Request
+    ) -> FileResponse:
+        try:
+            path, media_type = await service_container(
+                request
+            ).telegram.get_message_thumbnail_file(dialog_id, message_id)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type=media_type,
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
+
+    @app.get(
         "/api/telegram/dialogs/{dialog_id}/messages/{message_id}/media",
         dependencies=[Depends(require_admin)],
     )

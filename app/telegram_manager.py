@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import re
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,14 @@ class TelegramManager:
         self._client: Client | None = None
         self._lock = asyncio.Lock()
         self._preview_lock = asyncio.Lock()
+        self._thumbnail_semaphore = asyncio.Semaphore(4)
+        self._dialog_peers: dict[str, Any] = {}
+        self._message_objects: dict[tuple[str, int], Any] = {}
+        self._message_cache: dict[
+            tuple[str, int, int], tuple[float, list[dict[str, Any]]]
+        ] = {}
+        self._recent_message_cache_ttl = 30.0
+        self._older_message_cache_ttl = 300.0
 
     @property
     def session_path(self) -> Path:
@@ -365,6 +374,9 @@ class TelegramManager:
                     seen_ids.add(item["id"])
                     dialogs.append(item)
                     new_dialogs += 1
+                    self._dialog_peers[item["id"]] = self._input_peer(
+                        dialog.peer, users, chats
+                    )
             if page_dialogs < page_size or new_dialogs == 0:
                 break
             last_dialog = next(
@@ -484,43 +496,8 @@ class TelegramManager:
             "has_media": media is not None,
         }
 
-    async def list_dialog_messages(
-        self,
-        dialog_id: str,
-        limit: int = 30,
-        before_id: int | None = None,
-    ) -> list[dict[str, Any]]:
-        client = await self.get_client()
-        message_limit = max(1, min(int(limit), 100))
-        kwargs: dict[str, Any] = {}
-        if before_id is not None:
-            kwargs["offset_id"] = int(before_id)
-        messages: list[dict[str, Any]] = []
-        async for message in client.get_chat_history(
-            dialog_id, limit=message_limit, **kwargs
-        ):
-            item = self._message_info(message)
-            if item["media_type"] in {"photo", "video", "video_note", "animation"}:
-                item["preview_url"] = (
-                    f"/api/telegram/dialogs/{dialog_id}/messages/{item['id']}/media"
-                )
-            else:
-                item["preview_url"] = ""
-            messages.append(item)
-        messages.reverse()
-        return messages
-
-    async def get_message_media_file(
-        self, dialog_id: str, message_id: int
-    ) -> tuple[Path, str]:
-        client = await self.get_client()
-        message = await client.get_messages(dialog_id, message_ids=message_id)
-        if isinstance(message, list):
-            message = message[0] if message else None
-        if message is None:
-            raise ValueError("消息不存在或已被删除")
-        media_type = ""
-        media = None
+    @staticmethod
+    def _message_media(message: Any) -> tuple[str, Any | None]:
         for candidate in (
             "photo",
             "video",
@@ -532,8 +509,150 @@ class TelegramManager:
         ):
             value = getattr(message, candidate, None)
             if value is not None:
-                media_type, media = candidate, value
-                break
+                return candidate, value
+        return "", None
+
+    @classmethod
+    def _message_thumbnail(cls, message: Any) -> Any | None:
+        _, media = cls._message_media(message)
+        thumbs = getattr(media, "thumbs", None) if media is not None else None
+        if not thumbs:
+            return None
+        return max(
+            thumbs,
+            key=lambda thumb: (
+                int(getattr(thumb, "width", 0) or 0)
+                * int(getattr(thumb, "height", 0) or 0),
+                int(getattr(thumb, "file_size", 0) or 0),
+            ),
+        )
+
+    def _remember_message(self, dialog_id: str, message: Any) -> None:
+        key = (str(dialog_id), int(getattr(message, "id", 0)))
+        self._message_objects[key] = message
+        if len(self._message_objects) > 3000:
+            self._message_objects.pop(next(iter(self._message_objects)))
+
+    async def _get_message_object(
+        self, client: Client, dialog_id: str, message_id: int
+    ) -> Any:
+        key = (str(dialog_id), int(message_id))
+        cached = self._message_objects.get(key)
+        if cached is not None:
+            return cached
+        message = await client.get_messages(dialog_id, message_ids=message_id)
+        if isinstance(message, list):
+            message = message[0] if message else None
+        if message is None:
+            raise ValueError("消息不存在或已被删除")
+        self._remember_message(dialog_id, message)
+        return message
+
+    async def list_dialog_messages(
+        self,
+        dialog_id: str,
+        limit: int = 30,
+        before_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        message_limit = max(1, min(int(limit), 100))
+        offset_id = int(before_id or 0)
+        cache_key = (str(dialog_id), message_limit, offset_id)
+        cache_ttl = (
+            self._older_message_cache_ttl
+            if before_id is not None
+            else self._recent_message_cache_ttl
+        )
+        cached = self._message_cache.get(cache_key)
+        if cached is not None and time.monotonic() - cached[0] < cache_ttl:
+            return [dict(item) for item in cached[1]]
+
+        client = await self.get_client()
+        messages: list[dict[str, Any]] = []
+        peer = self._dialog_peers.get(str(dialog_id))
+        if peer is None:
+            raw_messages: list[Any] = []
+            kwargs: dict[str, Any] = {}
+            if before_id is not None:
+                kwargs["offset_id"] = offset_id
+            async for message in client.get_chat_history(
+                dialog_id, limit=message_limit, **kwargs
+            ):
+                raw_messages.append(message)
+        else:
+            response = await client.invoke(
+                raw.functions.messages.GetHistory(
+                    peer=peer,
+                    offset_id=offset_id,
+                    offset_date=0,
+                    add_offset=0,
+                    limit=message_limit,
+                    max_id=0,
+                    min_id=0,
+                    hash=0,
+                ),
+                sleep_threshold=30,
+            )
+            raw_messages = await utils.parse_messages(client, response, replies=0)
+
+        for message in raw_messages:
+            item = self._message_info(message)
+            self._remember_message(dialog_id, message)
+            if (
+                item["media_type"] in {"photo", "video", "video_note", "animation"}
+                and self._message_thumbnail(message) is not None
+            ):
+                item["preview_url"] = (
+                    f"/api/telegram/dialogs/{dialog_id}/messages/{item['id']}/thumbnail"
+                )
+            else:
+                item["preview_url"] = ""
+            messages.append(item)
+        messages.reverse()
+        self._message_cache[cache_key] = (time.monotonic(), messages)
+        if len(self._message_cache) > 240:
+            self._message_cache.pop(next(iter(self._message_cache)))
+        return messages
+
+    async def get_message_thumbnail_file(
+        self, dialog_id: str, message_id: int
+    ) -> tuple[Path, str]:
+        client = await self.get_client()
+        message = await self._get_message_object(client, dialog_id, message_id)
+        thumbnail = self._message_thumbnail(message)
+        if thumbnail is None:
+            raise ValueError("该消息没有可用缩略图")
+
+        cache_dir = (
+            self.session_dir
+            / "thumbnail_cache"
+            / re.sub(r"[^0-9A-Za-z_.-]", "_", str(dialog_id))
+        )
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        unique_id = re.sub(
+            r"[^0-9A-Za-z_.-]",
+            "_",
+            str(getattr(thumbnail, "file_unique_id", "") or message_id),
+        )[:24]
+        target = cache_dir / f"{message_id}-{unique_id}.jpg"
+        async with self._thumbnail_semaphore:
+            if not target.exists() or target.stat().st_size == 0:
+                temporary = target.with_suffix(target.suffix + ".part")
+                if temporary.exists():
+                    temporary.unlink()
+                downloaded = await client.download_media(
+                    thumbnail.file_id, file_name=str(temporary), block=True
+                )
+                if downloaded is None or not temporary.exists():
+                    raise RuntimeError("Telegram 缩略图缓存下载失败")
+                temporary.replace(target)
+        return target, "image/jpeg"
+
+    async def get_message_media_file(
+        self, dialog_id: str, message_id: int
+    ) -> tuple[Path, str]:
+        client = await self.get_client()
+        message = await self._get_message_object(client, dialog_id, message_id)
+        media_type, media = self._message_media(message)
         if media is None:
             raise ValueError("该消息不包含可预览媒体")
 
@@ -571,6 +690,9 @@ class TelegramManager:
         return target, str(mime_type)
 
     async def logout(self) -> None:
+        self._dialog_peers.clear()
+        self._message_objects.clear()
+        self._message_cache.clear()
         async with self._lock:
             client = self._client
             self._client = None

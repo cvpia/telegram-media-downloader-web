@@ -12,7 +12,7 @@
 
 <section class="panel dialogs-panel">
   <div class="panel-heading">
-    <div><h2>账号频道与会话</h2><p class="muted">点击频道即可查看最近消息；勾选后可批量添加为下载来源</p></div>
+    <div><h2>账号频道与会话</h2><p class="muted">点击频道即可查看最近消息，上滑自动读取更早记录；勾选后可批量添加为下载来源</p></div>
     <button class="button button-ghost button-small" id="refresh-dialogs" type="button">同步更新</button>
   </div>
   <div class="dialog-workspace">
@@ -34,7 +34,7 @@
       <div class="dialog-preview-empty" id="dialog-preview-empty">
         <span class="preview-mark" aria-hidden="true">◌</span>
         <h3>选择一个频道</h3>
-        <p>点击左侧频道或群组，加载最近的 30 条消息。</p>
+        <p>点击左侧频道或群组，加载最近的 30 条消息，继续上滑会自动加载更早记录。</p>
       </div>
       <div id="dialog-preview-content" hidden>
         <header class="dialog-preview-heading">
@@ -161,6 +161,7 @@
 const initialChats = {{ chats | tojson }};
 const telegramConnected = {{ 'true' if telegram_connected else 'false' }};
 const DIALOG_CACHE_KEY = 'tmd:dialogs:v2';
+const MESSAGE_CACHE_LIMIT = 12;
 let allDialogs = [];
 let currentChats = initialChats;
 let configuredRefs = new Set();
@@ -171,8 +172,11 @@ let currentMessages = [];
 let oldestMessageId = null;
 let hasMoreMessages = true;
 let loadingOlderMessages = false;
+let loadingRecentMessages = false;
+let olderLoadScheduled = false;
 let messageObserver = null;
 let syncInProgress = false;
+const messageCache = new Map();
 
 function readDialogCache() {
   try {
@@ -425,13 +429,51 @@ function formatMessageDate(value) {
   });
 }
 
+function readMessageCache(dialogId) {
+  const cached = messageCache.get(String(dialogId));
+  if (!cached || !Array.isArray(cached.messages) || !cached.messages.length) return null;
+  return cached;
+}
+
+function writeMessageCache(dialogId) {
+  if (!currentMessages.length) return;
+  const key = String(dialogId);
+  messageCache.delete(key);
+  messageCache.set(key, {
+    messages: currentMessages,
+    oldestMessageId,
+    hasMoreMessages,
+    cachedAt: Date.now()
+  });
+  while (messageCache.size > MESSAGE_CACHE_LIMIT) {
+    messageCache.delete(messageCache.keys().next().value);
+  }
+}
+
+function renderMessageLoading(container) {
+  container.setAttribute('aria-busy', 'true');
+  container.innerHTML = `<div class="message-loading-state" role="status">
+    <div class="message-loading-title"><span class="loading-spinner" aria-hidden="true"></span>正在读取最近消息…</div>
+    <span class="message-skeleton"></span><span class="message-skeleton message-skeleton-short"></span><span class="message-skeleton"></span>
+  </div>`;
+}
+
+function historyMarker() {
+  if (!hasMoreMessages) {
+    return '<div class="message-history-end" id="message-history-sentinel">已加载全部消息</div>';
+  }
+  return `<button class="message-load-older" id="message-history-sentinel" type="button" data-load-older ${loadingOlderMessages ? 'disabled' : ''}>${loadingOlderMessages ? '<span class="loading-spinner" aria-hidden="true"></span>正在加载更早消息…' : '上滑到这里自动加载更早消息'}</button>`;
+}
+
 function renderMessages(messages, { scrollToBottom = true, preserve = null } = {}) {
   const container = document.getElementById('dialog-messages');
+  container.removeAttribute('aria-busy');
   if (!messages.length) {
     container.innerHTML = '<p class="empty-state">这个会话暂时没有可显示的消息</p>';
     return;
   }
-  container.innerHTML = '<button class="message-load-older" id="message-history-sentinel" type="button" data-load-older>加载更早的 50 条</button>' + messages.map((message) => {
+  const dialogId = activeDialog ? activeDialog.id : '';
+  container.innerHTML = historyMarker() + messages.map((message) => {
     const media = message.media_label
       ? `<span class="tag tag-downloading">${TMD.escape(message.media_label)}</span>`
       : '';
@@ -441,9 +483,10 @@ function renderMessages(messages, { scrollToBottom = true, preserve = null } = {
     let preview = '';
     if (message.preview_url && ['photo', 'video'].includes(message.media_type)) {
       const source = TMD.escape(message.preview_url);
-      preview = message.media_type === 'photo'
-        ? `<div class="message-media-preview"><img src="${source}" alt="${TMD.escape(message.media_name || '图片')}" loading="lazy"></div>`
-        : `<div class="message-media-preview"><video controls preload="metadata" src="${source}"></video></div>`;
+      const fullMedia = `/api/telegram/dialogs/${encodeURIComponent(dialogId)}/messages/${message.id}/media`;
+      const label = TMD.escape(message.media_name || (message.media_type === 'photo' ? '图片' : '视频'));
+      const mediaLink = `<a class="message-media-open" href="${fullMedia}" target="_blank" rel="noopener">${message.media_type === 'video' ? '播放视频' : '查看原图'}</a>`;
+      preview = `<div class="message-media-preview"><img src="${source}" alt="${label}" loading="lazy" decoding="async" onerror="this.hidden=true">${mediaLink}</div>`;
     }
     const saveButton = message.has_media
       ? `<button class="message-save-button" type="button" data-save-message="${message.id}" data-media-type="${TMD.escape(message.media_type)}">保存到 downloads/群名</button>`
@@ -463,6 +506,29 @@ function renderMessages(messages, { scrollToBottom = true, preserve = null } = {
     } else if (scrollToBottom) {
       container.scrollTop = container.scrollHeight;
     }
+    queueOlderMessagesLoad();
+  });
+}
+
+function updateOlderHistoryMarker() {
+  const sentinel = document.getElementById('message-history-sentinel');
+  if (!sentinel || !hasMoreMessages) return;
+  sentinel.disabled = loadingOlderMessages;
+  sentinel.innerHTML = loadingOlderMessages
+    ? '<span class="loading-spinner" aria-hidden="true"></span>正在加载更早消息…'
+    : '上滑到这里自动加载更早消息';
+}
+
+function queueOlderMessagesLoad() {
+  if (olderLoadScheduled) return;
+  olderLoadScheduled = true;
+  requestAnimationFrame(() => {
+    olderLoadScheduled = false;
+    const container = document.getElementById('dialog-messages');
+    if (!activeDialog || loadingRecentMessages || loadingOlderMessages || !hasMoreMessages) return;
+    if (container.scrollTop <= 120) {
+      loadDialogMessages(activeDialog, { appendOlder: true });
+    }
   });
 }
 
@@ -473,10 +539,8 @@ function observeMessageSentinel() {
   if (messageObserver) messageObserver.disconnect();
   if (!('IntersectionObserver' in window)) return;
   messageObserver = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting) && activeDialog) {
-      loadDialogMessages(activeDialog, { appendOlder: true });
-    }
-  }, { root: container, rootMargin: '120px 0px 0px 0px', threshold: 0 });
+    if (entries.some((entry) => entry.isIntersecting)) queueOlderMessagesLoad();
+  }, { root: container, rootMargin: '280px 0px 0px 0px', threshold: 0 });
   messageObserver.observe(sentinel);
 }
 
@@ -487,14 +551,19 @@ function mergeMessages(older, current) {
 }
 
 async function loadDialogMessages(dialog, { appendOlder = false } = {}) {
-  if (appendOlder && (!activeDialog || loadingOlderMessages || !hasMoreMessages)) return;
+  if (appendOlder && (!activeDialog || loadingRecentMessages || loadingOlderMessages || !hasMoreMessages)) return;
+  const container = document.getElementById('dialog-messages');
+  let cached = null;
   if (!appendOlder) {
+    if (messageObserver) messageObserver.disconnect();
     activeDialogId = dialog.id;
     activeDialog = dialog;
-    currentMessages = [];
-    oldestMessageId = null;
-    hasMoreMessages = true;
+    cached = readMessageCache(dialog.id);
+    currentMessages = cached ? mergeMessages(cached.messages, []) : [];
+    oldestMessageId = cached?.oldestMessageId ?? null;
+    hasMoreMessages = cached?.hasMoreMessages ?? true;
     loadingOlderMessages = false;
+    loadingRecentMessages = true;
     document.querySelectorAll('#dialog-list .dialog-row').forEach((row) => {
       row.classList.toggle('is-active', row.dataset.dialogId === dialog.id);
     });
@@ -503,16 +572,21 @@ async function loadDialogMessages(dialog, { appendOlder = false } = {}) {
     document.getElementById('preview-title').textContent = dialog.title;
     document.getElementById('preview-meta').textContent = `${dialogRef(dialog)} · ${typeLabel(dialog.type)}`;
     setPreviewAvatar(dialog);
+    if (currentMessages.length) {
+      renderMessages(currentMessages, { scrollToBottom: true });
+    } else {
+      renderMessageLoading(container);
+    }
   }
-  const container = document.getElementById('dialog-messages');
+
   const preserve = appendOlder
     ? { height: container.scrollHeight, top: container.scrollTop }
     : null;
-  if (!appendOlder) container.innerHTML = '<p class="empty-state">正在加载最近消息…</p>';
   const pageSize = appendOlder ? 50 : 30;
   const requestId = ++messageRequestId;
   if (appendOlder) {
     loadingOlderMessages = true;
+    updateOlderHistoryMarker();
     container.setAttribute('aria-busy', 'true');
   }
   try {
@@ -523,22 +597,32 @@ async function loadDialogMessages(dialog, { appendOlder = false } = {}) {
     if (requestId !== messageRequestId) return;
     if (appendOlder) {
       currentMessages = mergeMessages(messages, currentMessages);
+    } else if (cached) {
+      currentMessages = mergeMessages(messages, currentMessages);
     } else {
       currentMessages = mergeMessages(messages, []);
     }
     oldestMessageId = currentMessages.length ? currentMessages[0].id : null;
     hasMoreMessages = messages.length >= pageSize;
+    writeMessageCache(dialog.id);
     renderMessages(currentMessages, { scrollToBottom: !appendOlder, preserve });
   } catch (err) {
     if (requestId !== messageRequestId) return;
-    if (!appendOlder) {
+    if (!currentMessages.length) {
       container.innerHTML = `<p class="empty-state">消息加载失败：${TMD.escape(err.message)}</p>`;
+    } else {
+      TMD.toast(`刷新消息失败，继续显示本地缓存：${err.message}`, 'error');
     }
-    TMD.toast(err.message, 'error');
   } finally {
-    if (appendOlder) {
-      loadingOlderMessages = false;
+    if (requestId === messageRequestId) {
+      if (appendOlder) {
+        loadingOlderMessages = false;
+      } else {
+        loadingRecentMessages = false;
+      }
       container.removeAttribute('aria-busy');
+      updateOlderHistoryMarker();
+      queueOlderMessagesLoad();
     }
   }
 }
@@ -550,10 +634,13 @@ function closeDialogPreview() {
   oldestMessageId = null;
   hasMoreMessages = true;
   loadingOlderMessages = false;
+  loadingRecentMessages = false;
+  olderLoadScheduled = false;
   if (messageObserver) {
     messageObserver.disconnect();
     messageObserver = null;
   }
+  document.getElementById('dialog-messages').removeAttribute('aria-busy');
   messageRequestId += 1;
   document.querySelectorAll('#dialog-list .dialog-row.is-active').forEach((row) => row.classList.remove('is-active'));
   document.getElementById('dialog-preview-empty').hidden = false;
@@ -608,9 +695,7 @@ document.getElementById('dialog-list').addEventListener('click', (event) => {
   if (dialog) loadDialogMessages(dialog);
 });
 document.getElementById('dialog-messages').addEventListener('scroll', (event) => {
-  if (event.currentTarget.scrollTop <= 48 && activeDialog) {
-    loadDialogMessages(activeDialog, { appendOlder: true });
-  }
+  if (event.currentTarget.scrollTop <= 120) queueOlderMessagesLoad();
 });
 document.getElementById('close-dialog-preview').addEventListener('click', closeDialogPreview);
 document.getElementById('dialog-messages').addEventListener('click', async (event) => {

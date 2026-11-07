@@ -220,6 +220,10 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert "点击频道即可查看最近消息" in chats_page.text
     assert 'id="dialog-preview"' in chats_page.text
     assert "加载最近的 30 条消息" in chats_page.text
+    assert "上滑到这里自动加载更早消息" in chats_page.text
+    assert "IntersectionObserver" in chats_page.text
+    assert "rootMargin: '280px 0px 0px 0px'" in chats_page.text
+    assert "messageCache" in chats_page.text
     assert 'id="sync-state"' in chats_page.text
     assert "tmd:dialogs:v2" in chats_page.text
     assert "localStorage" in chats_page.text
@@ -444,6 +448,11 @@ def test_media_preview_direct_download_and_history_api(
         assert message_id == 9
         return preview_file, "image/jpeg"
 
+    async def fake_thumbnail(dialog_id, message_id):
+        assert dialog_id == "-100123"
+        assert message_id == 9
+        return preview_file, "image/jpeg"
+
     async def fake_direct(dialog_id, message_id, chat_title):
         assert dialog_id == "-100123"
         assert message_id == 9
@@ -457,7 +466,18 @@ def test_media_preview_direct_download_and_history_api(
         }
 
     monkeypatch.setattr(services.telegram, "get_message_media_file", fake_preview)
+    monkeypatch.setattr(
+        services.telegram, "get_message_thumbnail_file", fake_thumbnail
+    )
     monkeypatch.setattr(services.downloader, "start_direct_download", fake_direct)
+
+    response = client.get(
+        "/api/telegram/dialogs/-100123/messages/9/thumbnail"
+    )
+    assert response.status_code == 200
+    assert response.content == b"preview-image"
+    assert response.headers["content-type"].startswith("image/jpeg")
+    assert response.headers["cache-control"] == "private, max-age=86400"
 
     response = client.get(
         "/api/telegram/dialogs/-100123/messages/9/media"

@@ -225,7 +225,13 @@ async def test_list_dialog_messages_marks_media_preview(tmp_path, monkeypatch):
         text="",
         caption="Video",
         media=SimpleNamespace(value="video"),
-        video=SimpleNamespace(file_name="clip.mp4"),
+        video=SimpleNamespace(
+            file_name="clip.mp4",
+            thumbs=[
+                SimpleNamespace(file_id="small-thumb", width=90, height=60, file_size=100),
+                SimpleNamespace(file_id="large-thumb", width=320, height=180, file_size=400),
+            ],
+        ),
     )
 
     class FakeClient:
@@ -240,8 +246,121 @@ async def test_list_dialog_messages_marks_media_preview(tmp_path, monkeypatch):
 
     assert result[0]["has_media"] is True
     assert result[0]["preview_url"] == (
-        "/api/telegram/dialogs/-100123/messages/22/media"
+        "/api/telegram/dialogs/-100123/messages/22/thumbnail"
     )
+
+
+@pytest.mark.asyncio
+async def test_list_dialog_messages_reuses_recent_page_cache(tmp_path, monkeypatch):
+    manager = TelegramManager(settings=None, session_dir=tmp_path)
+    message = SimpleNamespace(
+        id=22,
+        date=None,
+        from_user=None,
+        sender_chat=SimpleNamespace(title="Channel"),
+        text="Cached",
+        caption="",
+        media=None,
+    )
+    request_count = 0
+
+    class FakeClient:
+        async def get_chat_history(self, dialog_id, limit):
+            nonlocal request_count
+            request_count += 1
+            yield message
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(manager, "get_client", fake_get_client)
+    first = await manager.list_dialog_messages("-100123", 30)
+    second = await manager.list_dialog_messages("-100123", 30)
+
+    assert request_count == 1
+    assert second == first
+    assert second[0] is not first[0]
+
+
+@pytest.mark.asyncio
+async def test_list_dialog_messages_uses_cached_input_peer(tmp_path, monkeypatch):
+    manager = TelegramManager(settings=None, session_dir=tmp_path)
+    peer = raw.types.InputPeerChannel(channel_id=123, access_hash=456)
+    manager._dialog_peers["-100123"] = peer
+    message = SimpleNamespace(
+        id=22,
+        date=None,
+        from_user=None,
+        sender_chat=SimpleNamespace(title="Channel"),
+        text="Fast",
+        caption="",
+        media=None,
+    )
+    invoked = []
+
+    class FakeClient:
+        async def invoke(self, request, sleep_threshold):
+            invoked.append((request, sleep_threshold))
+            return SimpleNamespace()
+
+        def get_chat_history(self, *args, **kwargs):
+            raise AssertionError("cached dialogs should not resolve the peer again")
+
+    async def fake_get_client():
+        return FakeClient()
+
+    async def fake_parse_messages(client, response, replies):
+        assert replies == 0
+        return [message]
+
+    monkeypatch.setattr(manager, "get_client", fake_get_client)
+    monkeypatch.setattr("app.telegram_manager.utils.parse_messages", fake_parse_messages)
+    result = await manager.list_dialog_messages("-100123", 30)
+
+    assert result[0]["text"] == "Fast"
+    assert isinstance(invoked[0][0], raw.functions.messages.GetHistory)
+    assert invoked[0][0].peer == peer
+    assert invoked[0][0].limit == 30
+    assert invoked[0][1] == 30
+
+
+@pytest.mark.asyncio
+async def test_get_message_thumbnail_file_uses_largest_thumbnail(tmp_path, monkeypatch):
+    manager = TelegramManager(settings=None, session_dir=tmp_path)
+    message = SimpleNamespace(
+        id=22,
+        date=None,
+        from_user=None,
+        sender_chat=SimpleNamespace(title="Channel"),
+        text="",
+        caption="Video",
+        media=SimpleNamespace(value="video"),
+        video=SimpleNamespace(
+            file_name="clip.mp4",
+            thumbs=[
+                SimpleNamespace(file_id="small-thumb", width=90, height=60, file_size=100),
+                SimpleNamespace(file_id="large-thumb", width=320, height=180, file_size=400),
+            ],
+        ),
+    )
+    manager._message_objects[("-100123", 22)] = message
+
+    class FakeClient:
+        async def download_media(self, file_id, file_name, block):
+            assert file_id == "large-thumb"
+            assert block is True
+            Path(file_name).write_bytes(b"thumbnail")
+            return file_name
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(manager, "get_client", fake_get_client)
+    path, media_type = await manager.get_message_thumbnail_file("-100123", 22)
+
+    assert path.read_bytes() == b"thumbnail"
+    assert path.suffix == ".jpg"
+    assert media_type == "image/jpeg"
 
 
 @pytest.mark.asyncio
