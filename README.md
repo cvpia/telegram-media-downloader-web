@@ -76,6 +76,14 @@ message_date >= 2025.01.01 and media_type == r'(video|audio)'
 
 ## Docker 启动
 
+Docker Hub 镜像：
+
+```bash
+docker pull xxoo520zls/telegram-media-downloader-web:3.7.0
+```
+
+也可以直接使用 Compose 构建并启动（配置中的 `image` 会同步标记本地构建结果）：
+
 ```bash
 docker compose up -d --build
 ```
@@ -94,6 +102,20 @@ http://localhost:8000
 - `./downloads`：默认下载目录
 
 备份时至少需要保留 `./data`。
+
+仅拉取镜像运行：
+
+```bash
+docker run -d \
+  --name telegram-media-downloader \
+  -p 8000:8000 \
+  -e TMD_DATA_DIR=/data \
+  -e TMD_DOWNLOAD_DIR=/downloads \
+  -v "$PWD/data:/data" \
+  -v "$PWD/downloads:/downloads" \
+  --restart unless-stopped \
+  xxoo520zls/telegram-media-downloader-web:3.7.0
+```
 
 ## 本地开发
 
