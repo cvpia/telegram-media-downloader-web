@@ -24,11 +24,12 @@
        data-telegram="{{ 'true' if telegram_connected else 'false' }}"
        data-chats="{{ 'true' if chats_configured else 'false' }}">
     <section class="wizard-step" data-step="1">
-      <div class="step-heading"><span class="step-number">01</span><div><h2>设置网络代理</h2><p>如果本机可以直接访问 Telegram，可以留空并点击“跳过代理”。代理凭据会加密保存。</p></div></div>
+      <div class="step-heading"><span class="step-number">01</span><div><h2>设置网络代理</h2><p>必须先通过网络测试。填写代理会测试代理连通性；不填写则可测试直连。代理凭据会加密保存。</p></div></div>
       <form id="proxy-form" class="stack-form narrow-form">
         <label><span>代理地址（可选）</span><input id="setup-proxy-url" type="text" placeholder="socks5://user:password@127.0.0.1:1080" autocomplete="off"></label>
         <div class="notice notice-info">支持 HTTP、HTTPS、SOCKS4 和 SOCKS5。示例：<code>socks5://127.0.0.1:7890</code></div>
-        <div class="button-row"><button class="button button-ghost" type="button" id="skip-proxy">跳过代理</button><button class="button button-primary" type="submit">保存并继续</button></div>
+        <div class="button-row"><button class="button button-ghost" type="button" id="skip-proxy">不使用代理并测试</button><button class="button button-primary" type="submit">测试代理并继续</button></div>
+        <p class="form-status" id="proxy-status" hidden></p>
         <p class="form-error" data-error hidden></p>
       </form>
     </section>
@@ -48,6 +49,7 @@
       <form id="credentials-form" class="stack-form narrow-form">
         <label><span>API ID</span><input id="api-id" type="number" min="1" placeholder="例如 12345678" required></label>
         <label><span>API Hash</span><input id="api-hash" type="password" autocomplete="off" placeholder="32 位 API Hash" required></label>
+        <label><span>Bot Token（可选）</span><input id="bot-token" type="password" autocomplete="off" placeholder="123456789:AA..."></label>
         <div class="button-row"><button class="button button-ghost" type="button" id="credentials-back">上一步</button><button class="button button-primary" type="submit">保存并继续</button></div>
         <p class="form-error" data-error hidden></p>
       </form>
@@ -156,24 +158,44 @@ function showStep(step) {
   });
 }
 
-async function saveProxy(proxyUrl) {
-  await TMD.api('/api/setup/proxy', { method: 'POST', body: { proxy_url: proxyUrl } });
-  initial.proxy = 'true';
-  showStep(2);
+async function testAndSaveProxy(proxyUrl) {
+  const form = document.getElementById('proxy-form');
+  const status = document.getElementById('proxy-status');
+  const submit = form.querySelector('button[type="submit"]');
+  const skip = document.getElementById('skip-proxy');
+  setError(form, '');
+  status.hidden = false;
+  status.dataset.state = 'loading';
+  status.textContent = proxyUrl ? '正在通过代理连接 Telegram…' : '正在测试直连 Telegram…';
+  submit.disabled = true;
+  skip.disabled = true;
+  try {
+    const result = await TMD.api('/api/setup/proxy/test', { method: 'POST', body: { proxy_url: proxyUrl } });
+    status.dataset.state = 'success';
+    status.textContent = `网络测试通过，耗时 ${result.latency_ms} ms`;
+    initial.proxy = 'true';
+    TMD.toast(result.mode === 'proxy' ? '代理网络测试通过' : '直连网络测试通过', 'success');
+    showStep(2);
+  } catch (err) {
+    status.dataset.state = 'error';
+    status.textContent = err.message;
+    setError(form, err.message);
+    TMD.toast(err.message, 'error');
+    throw err;
+  } finally {
+    submit.disabled = false;
+    skip.disabled = false;
+  }
 }
 
 document.getElementById('proxy-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const form = event.currentTarget;
-  setError(form, '');
-  try {
-    await saveProxy(document.getElementById('setup-proxy-url').value.trim());
-  } catch (err) { setError(form, err.message); }
+  try { await testAndSaveProxy(document.getElementById('setup-proxy-url').value.trim()); }
+  catch (_) {}
 });
 document.getElementById('skip-proxy').addEventListener('click', async () => {
-  const form = document.getElementById('proxy-form');
-  setError(form, '');
-  try { await saveProxy(''); } catch (err) { setError(form, err.message); }
+  try { await testAndSaveProxy(''); }
+  catch (_) {}
 });
 document.getElementById('admin-back').addEventListener('click', () => showStep(1));
 
@@ -195,15 +217,26 @@ document.getElementById('admin-form').addEventListener('submit', async (event) =
 document.getElementById('credentials-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const apiHash = document.getElementById('api-hash').value.trim();
+  const botToken = document.getElementById('bot-token').value.trim();
   setError(form, '');
+  if (initial.api !== 'true' && !apiHash) {
+    setError(form, '首次配置必须填写 API Hash');
+    return;
+  }
+  button.disabled = true;
+  button.textContent = '正在保存…';
   try {
-    await TMD.api('/api/settings', { method: 'PUT', body: {
-      api_id: Number(document.getElementById('api-id').value),
-      api_hash: document.getElementById('api-hash').value
-    }});
+    const body = { api_id: Number(document.getElementById('api-id').value) };
+    if (apiHash) body.api_hash = apiHash;
+    if (botToken) body.bot_token = botToken;
+    await TMD.api('/api/settings', { method: 'PUT', body });
     initial.api = 'true';
+    TMD.toast('Telegram API 配置已保存', 'success');
     showStep(4);
   } catch (err) { setError(form, err.message); }
+  finally { button.disabled = false; button.textContent = '保存并继续'; }
 });
 document.getElementById('credentials-back').addEventListener('click', () => showStep(2));
 
@@ -211,16 +244,27 @@ let loginId = null;
 document.getElementById('phone-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
   setError(form, '');
+  button.disabled = true;
+  button.textContent = '正在发送验证码…';
+  TMD.toast('正在连接 Telegram 并发送验证码…', 'info');
   try {
     const result = await TMD.api('/api/telegram/login/start', { method: 'POST', body: {
       phone_number: document.getElementById('phone-number').value
     }});
     loginId = result.login_id;
+    TMD.toast('验证码已发送，请查看 Telegram', 'success');
     form.hidden = true;
     document.getElementById('code-form').hidden = false;
     document.getElementById('login-code').focus();
-  } catch (err) { setError(form, err.message); }
+  } catch (err) {
+    setError(form, err.message);
+    TMD.toast(err.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = '发送验证码';
+  }
 });
 document.getElementById('code-back').addEventListener('click', () => {
   document.getElementById('code-form').hidden = true;
@@ -229,36 +273,61 @@ document.getElementById('code-back').addEventListener('click', () => {
 document.getElementById('code-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
   setError(form, '');
+  button.disabled = true;
+  button.textContent = '正在验证…';
+  TMD.toast('正在验证 Telegram 验证码…', 'info');
   try {
     const result = await TMD.api('/api/telegram/login/code', { method: 'POST', body: {
       login_id: loginId, code: document.getElementById('login-code').value
     }});
     if (result.next_step === 'password') {
+      TMD.toast('验证码正确，请输入两步验证密码', 'success');
       form.hidden = true;
       document.getElementById('password-form').hidden = false;
       return;
     }
+    TMD.toast('Telegram 登录成功', 'success');
     initial.telegram = 'true';
     showStep(5);
-  } catch (err) { setError(form, err.message); }
+  } catch (err) {
+    setError(form, err.message);
+    TMD.toast(err.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = '验证并继续';
+  }
 });
 document.getElementById('password-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
   setError(form, '');
+  button.disabled = true;
+  button.textContent = '正在登录…';
   try {
     await TMD.api('/api/telegram/login/password', { method: 'POST', body: {
       login_id: loginId, password: document.getElementById('telegram-password').value
     }});
+    TMD.toast('Telegram 登录成功', 'success');
     initial.telegram = 'true';
     showStep(5);
-  } catch (err) { setError(form, err.message); }
+  } catch (err) {
+    setError(form, err.message);
+    TMD.toast(err.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = '完成登录';
+  }
 });
 document.getElementById('phone-back').addEventListener('click', () => showStep(3));
 
 async function loadSettings() {
   const settings = await TMD.api('/api/settings');
+  document.getElementById('api-hash').required = false;
+  document.getElementById('api-hash').placeholder = '已配置，留空则不修改';
+  document.getElementById('bot-token').placeholder = settings.bot_token_configured ? '已配置，留空则不修改' : '123456789:AA...';
   document.getElementById('download-dir').value = settings.download_dir;
   document.getElementById('filename-template').value = settings.filename_template;
   document.getElementById('max-concurrent').value = settings.max_concurrent_downloads;
@@ -344,6 +413,10 @@ document.getElementById('setup-chat-list').addEventListener('click', async (even
   } catch (err) { TMD.toast(err.message, 'error'); }
 });
 document.getElementById('finish-setup').addEventListener('click', () => window.location.href = '/');
+document.getElementById('api-hash').required = initial.api !== 'true';
+if (initial.api === 'true') {
+  document.getElementById('api-hash').placeholder = '已配置，留空则不修改';
+}
 showStep(currentStep);
 if (initial.admin === 'true') {
   loadSettings().catch((err) => TMD.toast(err.message, 'error'));

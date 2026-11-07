@@ -29,6 +29,7 @@
       <label><span>API ID</span><input id="api-id" type="number" min="1"></label>
       <label><span>API Hash</span><input id="api-hash" type="password" autocomplete="off" placeholder="已配置，留空则不修改"></label>
     </div>
+    <label><span>Bot Token（可选）</span><input id="bot-token" type="password" autocomplete="off" placeholder="123456789:AA..."></label>
     <label><span>代理地址</span><input id="proxy-url" type="text" placeholder="socks5://user:password@127.0.0.1:1080"></label>
   </article>
 
@@ -74,8 +75,10 @@ function populate(settings) {
   document.getElementById('api-id').value = settings.api_id || '';
   document.getElementById('api-hash').value = '';
   document.getElementById('api-hash').placeholder = settings.api_hash_configured ? '已配置，留空则不修改' : '请输入 API Hash';
+  document.getElementById('bot-token').value = '';
+  document.getElementById('bot-token').placeholder = settings.bot_token_configured ? '已配置，留空则不修改' : '123456789:AA...';
   document.getElementById('proxy-url').value = '';
-  document.getElementById('proxy-url').placeholder = settings.proxy_configured ? '已配置，留空则清除' : 'socks5://127.0.0.1:1080';
+  document.getElementById('proxy-url').placeholder = settings.proxy_configured ? '已配置，留空则不修改' : 'socks5://127.0.0.1:1080';
   document.getElementById('download-dir').value = settings.download_dir;
   document.getElementById('filename-template').value = settings.filename_template;
   document.getElementById('max-concurrent').value = settings.max_concurrent_downloads;
@@ -108,9 +111,13 @@ document.getElementById('settings-form').addEventListener('submit', async (event
     if (apiId) body.api_id = apiId;
     const apiHash = document.getElementById('api-hash').value.trim();
     if (apiHash) body.api_hash = apiHash;
-    body.proxy_url = document.getElementById('proxy-url').value.trim();
+    const botToken = document.getElementById('bot-token').value.trim();
+    if (botToken) body.bot_token = botToken;
+    const proxyUrl = document.getElementById('proxy-url').value.trim();
+    if (proxyUrl) body.proxy_url = proxyUrl;
     const settings = await TMD.api('/api/settings', { method: 'PUT', body });
     initialSettings.api_hash_configured = settings.api_hash_configured;
+    initialSettings.bot_token_configured = settings.bot_token_configured;
     initialSettings.proxy_configured = settings.proxy_configured;
     TMD.toast('设置已保存', 'success');
   } catch (err) {

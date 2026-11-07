@@ -27,6 +27,9 @@ def test_setup_page_renders_version_and_csrf(client: TestClient):
     assert "一次配置，直接开始下载" in response.text
     assert "设置网络代理" in response.text
     assert '<li data-progress="1"><span>1</span>网络代理</li>' in response.text
+    assert '测试代理并继续' in response.text
+    assert 'id="api-hash"' in response.text
+    assert 'id="bot-token"' in response.text
 
 
 def test_csrf_is_required(client: TestClient):
@@ -75,6 +78,7 @@ def test_settings_update_encrypts_secrets(client: TestClient, tmp_path):
         json={
             "api_id": 123456,
             "api_hash": "super-secret-hash",
+            "bot_token": "123456:super-secret-bot-token",
             "download_dir": str(download_dir),
             "media_types": ["photo", "video"],
             "folder_parts": ["chat_title", "date", "media_type"],
@@ -89,12 +93,16 @@ def test_settings_update_encrypts_secrets(client: TestClient, tmp_path):
     assert payload["api_id"] == 123456
     assert payload["api_hash_configured"] is True
     assert "super-secret-hash" not in response.text
+    assert "super-secret-bot-token" not in response.text
+    assert payload["bot_token_configured"] is True
     assert payload["media_types"] == ["photo", "video"]
     assert download_dir.exists()
 
     raw_api_hash = client.app.state.services.database.get_setting("api_hash")
+    raw_bot_token = client.app.state.services.database.get_setting("bot_token")
     raw_proxy = client.app.state.services.database.get_setting("proxy_url")
     assert raw_api_hash.startswith("fernet:")
+    assert raw_bot_token.startswith("fernet:")
     assert raw_proxy.startswith("fernet:")
     assert "super-secret-hash" not in raw_api_hash
 
@@ -227,3 +235,39 @@ def test_proxy_can_be_skipped_without_redirect_loop(client: TestClient):
     assert response.json()["proxy_configured"] is False
     assert client.get("/api/setup/status").json()["proxy_step_completed"] is True
     assert client.get("/setup").status_code == 200
+
+def test_network_probe_must_pass_before_proxy_step_is_completed(client: TestClient, monkeypatch):
+    token = get_csrf(client)
+
+    async def fake_probe(proxy_url, target_url):
+        assert proxy_url == "socks5://127.0.0.1:1080"
+        assert target_url.startswith("https://")
+        return {"ok": True, "latency_ms": 87, "status_code": 200, "mode": "proxy"}
+
+    monkeypatch.setattr("app.main.test_network_connection", fake_probe)
+    response = client.post(
+        "/api/setup/proxy/test",
+        json={"proxy_url": "socks5://127.0.0.1:1080"},
+        headers={"X-CSRF-Token": token},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["latency_ms"] == 87
+    assert client.get("/api/setup/status").json()["proxy_step_completed"] is True
+
+
+def test_network_probe_failure_does_not_advance_setup(client: TestClient, monkeypatch):
+    token = get_csrf(client)
+
+    async def failed_probe(proxy_url, target_url):
+        from app.network import NetworkTestError
+
+        raise NetworkTestError("代理网络测试失败: timeout")
+
+    monkeypatch.setattr("app.main.test_network_connection", failed_probe)
+    response = client.post(
+        "/api/setup/proxy/test",
+        json={"proxy_url": "socks5://127.0.0.1:1080"},
+        headers={"X-CSRF-Token": token},
+    )
+    assert response.status_code == 422
+    assert client.get("/api/setup/status").json()["proxy_step_completed"] is False

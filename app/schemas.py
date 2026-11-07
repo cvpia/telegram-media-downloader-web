@@ -35,6 +35,7 @@ class LoginRequest(BaseModel):
 class SettingsUpdate(BaseModel):
     api_id: int | None = Field(default=None, gt=0)
     api_hash: str | None = Field(default=None, max_length=256)
+    bot_token: str | None = Field(default=None, max_length=512)
     download_dir: str | None = Field(default=None, max_length=1024)
     media_types: list[str] | None = None
     file_formats: dict[str, list[str]] | None = None
@@ -164,6 +165,7 @@ class ChatImportItem(BaseModel):
 class AppSettingsResponse(BaseModel):
     api_id: int | None = None
     api_hash_configured: bool = False
+    bot_token_configured: bool = False
     download_dir: str
     media_types: list[str]
     file_formats: dict[str, list[str]]

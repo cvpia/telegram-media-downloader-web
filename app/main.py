@@ -27,6 +27,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.config import PROJECT_ROOT, RuntimeConfig
 from app.database import Database
 from app.downloader import DownloaderService
+from app.network import NetworkTestError, test_network_connection
 from app.schemas import (
     AdminSetupRequest,
     ChatCreateRequest,
@@ -190,6 +191,30 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         services.settings.mark_proxy_step_completed()
         return {"ok": True, "proxy_configured": bool(proxy_url)}
 
+    @app.post("/api/setup/proxy/test", dependencies=[Depends(csrf_header)])
+    async def test_setup_proxy(
+        payload: ProxySetupRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        services = service_container(request)
+        if services.settings.admin_configured:
+            raise HTTPException(status_code=409, detail="管理员已经初始化，请到系统设置中修改代理")
+        proxy_url = payload.proxy_url.strip()
+        if proxy_url:
+            try:
+                TelegramManager.parse_proxy(proxy_url)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        try:
+            result = await test_network_connection(
+                proxy_url,
+                request.app.state.runtime.network_test_url,
+            )
+        except NetworkTestError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        services.settings.update(SettingsUpdate(proxy_url=proxy_url))
+        services.settings.mark_proxy_step_completed()
+        return {**result, "proxy_configured": bool(proxy_url)}
     @app.post("/api/setup/admin", dependencies=[Depends(csrf_header)])
     async def setup_admin(
         payload: AdminSetupRequest,

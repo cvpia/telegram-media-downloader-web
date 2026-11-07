@@ -19,7 +19,7 @@ DEFAULT_FILE_FORMATS = {
 }
 DEFAULT_FOLDER_PARTS = ["chat_title", "year", "month", "media_type"]
 DEFAULT_FILENAME_TEMPLATE = "{message_id} - {file_name}"
-ENCRYPTED_KEYS = {"api_hash", "proxy_url"}
+ENCRYPTED_KEYS = {"api_hash", "bot_token", "proxy_url"}
 
 
 class SettingsService:
@@ -83,6 +83,9 @@ class SettingsService:
         api_hash = self._get("api_hash", "")
         return (int(api_id) if api_id else None, str(api_hash or ""))
 
+    def get_bot_token(self) -> str:
+        return str(self._get("bot_token", "") or "")
+
     def get_proxy_url(self) -> str:
         return str(self._get("proxy_url", "") or "")
 
@@ -114,6 +117,7 @@ class SettingsService:
         return {
             "api_id": api_id,
             "api_hash_configured": bool(api_hash),
+            "bot_token_configured": bool(self.get_bot_token()),
             "download_dir": str(self.download_dir()),
             "media_types": self.media_types(),
             "file_formats": self.file_formats(),
@@ -131,6 +135,8 @@ class SettingsService:
             self._set("api_id", int(values["api_id"]))
         if "api_hash" in values and values["api_hash"]:
             self._set("api_hash", values["api_hash"].strip())
+        if "bot_token" in values:
+            self._set("bot_token", str(values["bot_token"] or "").strip())
         if "download_dir" in values and values["download_dir"] is not None:
             download_dir = Path(values["download_dir"]).expanduser().resolve()
             download_dir.mkdir(parents=True, exist_ok=True)
@@ -161,6 +167,7 @@ class SettingsService:
         data = {
             "api_id": api_id,
             "api_hash": api_hash,
+            "bot_token": self.get_bot_token(),
             "chat": [
                 {
                     "chat_id": chat["chat_ref"],
@@ -192,6 +199,8 @@ class SettingsService:
             update_data["api_id"] = int(data["api_id"])
         if data.get("api_hash"):
             update_data["api_hash"] = str(data["api_hash"])
+        if data.get("bot_token"):
+            update_data["bot_token"] = str(data["bot_token"])
         if data.get("media_types"):
             update_data["media_types"] = list(data["media_types"])
         if data.get("file_formats"):

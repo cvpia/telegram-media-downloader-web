@@ -18,6 +18,7 @@ class RuntimeConfig:
     download_dir: Path
     csrf_enabled: bool = True
     start_downloader: bool = True
+    network_test_url: str = "https://api.telegram.org"
 
     @classmethod
     def from_env(cls) -> "RuntimeConfig":
@@ -30,6 +31,7 @@ class RuntimeConfig:
             download_dir=download_dir,
             csrf_enabled=os.getenv("TMD_CSRF_ENABLED", "1") != "0",
             start_downloader=os.getenv("TMD_START_DOWNLOADER", "1") != "0",
+            network_test_url=os.getenv("TMD_NETWORK_TEST_URL", "https://api.telegram.org"),
         )
 
     @property
