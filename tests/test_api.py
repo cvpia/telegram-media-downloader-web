@@ -246,6 +246,8 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert 'data-play-video data-media-url="${fullMedia}"' in chats_page.text
     assert 'id="video-dialog"' in chats_page.text
     assert 'id="video-player"' in chats_page.text
+    assert "typeof player.load === 'function'" in chats_page.text
+    assert "typeof player.play === 'function'" in chats_page.text
     assert 'id="sync-state"' in chats_page.text
     assert "tmd:dialogs:v2" in chats_page.text
     assert "localStorage" in chats_page.text

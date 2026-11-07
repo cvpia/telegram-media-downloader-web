@@ -442,9 +442,9 @@ function formatMessageDate(value) {
 
 function resetVideoPlayer() {
   const player = document.getElementById('video-player');
-  player.pause();
-  player.removeAttribute('src');
-  player.load();
+  if (typeof player.pause === 'function') player.pause();
+  if (typeof player.removeAttribute === 'function') player.removeAttribute('src');
+  if (typeof player.load === 'function') player.load();
 }
 
 function openVideoPlayer(url, title) {
@@ -455,7 +455,7 @@ function openVideoPlayer(url, title) {
   player.src = url;
   if (typeof dialog.showModal === 'function') dialog.showModal();
   else dialog.setAttribute('open', '');
-  player.play().catch(() => {});
+  if (typeof player.play === 'function') player.play().catch(() => {});
 }
 
 function closeVideoPlayer() {
