@@ -167,6 +167,7 @@ chat:
   - chat_id: '@yaml_channel'
     title: YAML Channel
     last_read_message_id: 25
+    download_filter: media_type == r'(video|audio)'
 """.encode("utf-8")
     response = client.post(
         "/api/settings/import.yaml",
@@ -245,6 +246,26 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert setup.status_code == 200, setup.text
     assert "配置向导" in setup.text
     assert "下载偏好" in setup.text
+
+
+def test_channel_filter_validation_api(client: TestClient):
+    token = initialize_admin(client)
+    headers = {"X-CSRF-Token": token}
+
+    response = client.post(
+        "/api/filters/validate",
+        json={"expression": "caption == r'.*电影.*' and file_size >= 10MB"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["valid"] is True
+
+    response = client.post(
+        "/api/filters/validate",
+        json={"expression": "caption > 'invalid'"},
+        headers=headers,
+    )
+    assert response.status_code == 422
 
 
 def test_proxy_is_first_setup_step_and_can_be_skipped(client: TestClient):

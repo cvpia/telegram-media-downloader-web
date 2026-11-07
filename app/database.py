@@ -14,6 +14,9 @@ def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+_UNSET = object()
+
+
 class Database:
     """Thread-safe SQLite wrapper.
 
@@ -49,6 +52,7 @@ class Database:
             last_message_id INTEGER NOT NULL DEFAULT 0,
             date_from TEXT,
             date_to TEXT,
+            download_filter TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -75,6 +79,13 @@ class Database:
         """
         with self._lock, self._connect() as connection:
             connection.executescript(schema)
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(chats)")
+            }
+            if "download_filter" not in columns:
+                connection.execute(
+                    "ALTER TABLE chats ADD COLUMN download_filter TEXT NOT NULL DEFAULT ''"
+                )
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self._lock, self._connect() as connection:
@@ -134,20 +145,28 @@ class Database:
         title: str = "",
         date_from: str | None = None,
         date_to: str | None = None,
+        download_filter: str = "",
     ) -> dict[str, Any]:
         now = utc_now()
         with self._lock, self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO chats(chat_ref, title, date_from, date_to, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO chats(
+                    chat_ref, title, date_from, date_to, download_filter,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_ref) DO UPDATE SET
                     title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE chats.title END,
                     date_from = excluded.date_from,
                     date_to = excluded.date_to,
+                    download_filter = CASE
+                        WHEN excluded.download_filter <> '' THEN excluded.download_filter
+                        ELSE chats.download_filter
+                    END,
                     updated_at = excluded.updated_at
                 """,
-                (chat_ref, title, date_from, date_to, now, now),
+                (chat_ref, title, date_from, date_to, download_filter, now, now),
             )
             row = connection.execute(
                 "SELECT * FROM chats WHERE chat_ref = ?", (chat_ref,)
@@ -160,8 +179,9 @@ class Database:
         *,
         title: str | None = None,
         enabled: bool | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
+        date_from: Any = _UNSET,
+        date_to: Any = _UNSET,
+        download_filter: Any = _UNSET,
     ) -> None:
         fields: list[str] = []
         values: list[Any] = []
@@ -171,12 +191,15 @@ class Database:
         if enabled is not None:
             fields.append("enabled = ?")
             values.append(1 if enabled else 0)
-        if date_from is not None:
+        if date_from is not _UNSET:
             fields.append("date_from = ?")
             values.append(date_from or None)
-        if date_to is not None:
+        if date_to is not _UNSET:
             fields.append("date_to = ?")
             values.append(date_to or None)
+        if download_filter is not _UNSET:
+            fields.append("download_filter = ?")
+            values.append(download_filter or "")
         if not fields:
             return
         fields.append("updated_at = ?")

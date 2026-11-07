@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.downloader import (
     DownloaderService,
     build_destination,
@@ -134,3 +136,61 @@ def test_downloader_snapshot_reports_speed_progress_and_disk(tmp_path: Path):
     assert snapshot["resource"]["download_dir"] == str(tmp_path)
     assert snapshot["resource"]["disk_total"] > 0
     assert 0 <= snapshot["resource"]["disk_percent"] <= 100
+
+
+@pytest.mark.asyncio
+async def test_channel_filter_skips_non_matching_media(tmp_path: Path, monkeypatch):
+    chat = {
+        "id": 1,
+        "chat_ref": "-100123",
+        "title": "Filtered",
+        "enabled": 1,
+        "last_message_id": 0,
+        "date_from": None,
+        "date_to": None,
+        "download_filter": "media_type == 'audio'",
+    }
+    message = SimpleNamespace(
+        id=10,
+        date=datetime(2025, 1, 1, tzinfo=UTC),
+        caption="",
+        text="",
+        video=SimpleNamespace(file_name="video.mp4", file_size=1024),
+        document=None,
+        photo=None,
+        audio=None,
+        voice=None,
+        video_note=None,
+        animation=None,
+    )
+
+    class FakeClient:
+        async def get_chat(self, chat_ref):
+            return SimpleNamespace(id=-100123, title="Filtered")
+
+        async def get_chat_history(self, chat_id, **kwargs):
+            yield message
+
+    last_messages = []
+    database = SimpleNamespace(
+        update_chat_metadata=lambda *args, **kwargs: None,
+        set_last_message=lambda chat_id, message_id: last_messages.append(
+            (chat_id, message_id)
+        ),
+    )
+    settings = SimpleNamespace(media_types=lambda: ["video"], file_formats=lambda: {})
+    telegram = SimpleNamespace(get_client=lambda: _async_value(FakeClient()))
+    service = DownloaderService(database, settings, telegram)
+    service.state = "running"
+
+    async def should_not_download(**kwargs):
+        raise AssertionError("filtered media must not be downloaded")
+
+    monkeypatch.setattr(service, "_download_message", should_not_download)
+    await service._download_chat(chat)
+
+    assert last_messages == [(1, 10)]
+
+
+async def _async_value(value):
+    return value

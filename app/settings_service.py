@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.database import Database
+from app.download_filter import validate_download_filter
 from app.schemas import SettingsUpdate
 from app.security import SecretCipher
 
@@ -223,16 +224,23 @@ class SettingsService:
             if hostname and port:
                 update_data["proxy_url"] = f"{scheme}://{hostname}:{port}"
 
+        chat_items = data.get("chat") or []
+        for item in chat_items:
+            if isinstance(item, dict) and item.get("chat_id") is not None:
+                validate_download_filter(str(item.get("download_filter", "") or ""))
+
         self.update(SettingsUpdate(**update_data))
 
         count = 0
-        for item in data.get("chat") or []:
+        for item in chat_items:
             if isinstance(item, dict) and item.get("chat_id") is not None:
+                download_filter = str(item.get("download_filter", "") or "").strip()
                 chat = self.database.upsert_chat(
                     str(item["chat_id"]),
                     str(item.get("title", "")),
                     item.get("date_from"),
                     item.get("date_to"),
+                    download_filter,
                 )
                 last_message_id = int(item.get("last_read_message_id", 0) or 0)
                 if last_message_id:

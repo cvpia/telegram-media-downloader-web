@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.download_filter import validate_download_filter
+
 
 MEDIA_TYPES = ("audio", "document", "photo", "video", "voice", "video_note", "animation")
 FOLDER_PARTS = ("chat_title", "media_type", "year", "month", "date")
@@ -136,11 +138,19 @@ class ChatCreateRequest(BaseModel):
     title: str = Field(default="", max_length=256)
     date_from: date | None = None
     date_to: date | None = None
+    download_filter: str = Field(default="", max_length=4000)
 
     @field_validator("chat_ref", "title")
     @classmethod
     def strip_text(cls, value: str):
         return value.strip()
+
+    @field_validator("download_filter")
+    @classmethod
+    def validate_filter(cls, value: str):
+        value = value.strip()
+        validate_download_filter(value)
+        return value
 
     @model_validator(mode="after")
     def validate_dates(self):
@@ -158,6 +168,27 @@ class ChatUpdateRequest(BaseModel):
     enabled: bool | None = None
     date_from: date | None = None
     date_to: date | None = None
+    download_filter: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("download_filter")
+    @classmethod
+    def validate_filter(cls, value: str | None):
+        if value is None:
+            return value
+        value = value.strip()
+        validate_download_filter(value)
+        return value
+
+
+class FilterValidateRequest(BaseModel):
+    expression: str = Field(default="", max_length=4000)
+
+    @field_validator("expression")
+    @classmethod
+    def validate_expression(cls, value: str):
+        value = value.strip()
+        validate_download_filter(value)
+        return value
 
 
 class ChatImportItem(BaseModel):

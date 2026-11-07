@@ -73,6 +73,44 @@
     <div id="chat-table" class="task-list"></div>
   </article>
 </section>
+<dialog class="rule-dialog" id="rule-dialog">
+  <form class="rule-form" id="rule-form">
+    <header class="rule-dialog-heading">
+      <div><div class="eyebrow">CHANNEL FILTER</div><h2>频道下载规则</h2><p class="muted" id="rule-chat-title"></p></div>
+      <button class="icon-button" id="close-rule-dialog" type="button" title="关闭">×</button>
+    </header>
+
+    <div class="rule-presets" aria-label="规则示例">
+      <button class="rule-preset" type="button" data-rule-preset="media_type == r'(video|audio)'">仅音视频</button>
+      <button class="rule-preset" type="button" data-rule-preset="file_size >= 10MB">大于 10MB</button>
+      <button class="rule-preset" type="button" data-rule-preset="file_name == r'.*1080p.*'">文件名含 1080p</button>
+      <button class="rule-preset" type="button" data-rule-preset="message_date >= 2025.01.01">2025 年以后</button>
+    </div>
+
+    <label>
+      <span>过滤表达式（留空则使用全局规则）</span>
+      <textarea id="download-filter" rows="6" maxlength="4000" spellcheck="false" placeholder="例如：file_size >= 10MB and (caption == r'.*电影.*' or file_name == r'.*1080p.*')"></textarea>
+    </label>
+
+    <div class="rule-reference">
+      <span><code>message_date</code> 日期</span><span><code>message_id</code> 消息 ID</span><span><code>caption</code> 标题</span>
+      <span><code>file_size</code> 大小</span><span><code>file_name</code> 文件名</span><span><code>media_type</code> 类型</span>
+      <span><code>file_extension</code> 扩展名</span><span><code>media_width</code> 宽度</span><span><code>media_height</code> 高度</span><span><code>media_duration</code> 时长</span>
+    </div>
+
+    <div class="form-grid">
+      <label><span>频道开始日期（快速筛选）</span><input id="rule-date-from" type="date"></label>
+      <label><span>频道结束日期（快速筛选）</span><input id="rule-date-to" type="date"></label>
+    </div>
+
+    <p class="rule-validation" id="rule-validation" hidden></p>
+    <div class="rule-dialog-actions">
+      <button class="button button-ghost" id="validate-rule" type="button">验证表达式</button>
+      <button class="button button-primary" type="submit">保存规则</button>
+    </div>
+  </form>
+</dialog>
+
 {% endblock %}
 {% block scripts %}
 <script>
@@ -80,6 +118,7 @@ const initialChats = {{ chats | tojson }};
 const telegramConnected = {{ 'true' if telegram_connected else 'false' }};
 const DIALOG_CACHE_KEY = 'tmd:dialogs:v2';
 let allDialogs = [];
+let currentChats = initialChats;
 let configuredRefs = new Set();
 let activeDialogId = null;
 let messageRequestId = 0;
@@ -189,13 +228,64 @@ function updateSelection() {
 
 function renderChats(chats) {
   const container = document.getElementById('chat-table');
+  currentChats = chats;
   updateConfiguredRefs(chats);
   if (!chats.length) {
     container.innerHTML = '<p class="empty-state">尚未添加频道</p>';
   } else {
-    container.innerHTML = chats.map((chat) => `<div class="task-row task-row-stack"><div class="task-line"><div><strong>${TMD.escape(chat.title || chat.chat_ref)}</strong><small>${TMD.escape(chat.chat_ref)} · 进度消息 #${chat.last_message_id}</small></div><div class="row-actions"><button class="link-button" data-toggle="${chat.id}" data-enabled="${chat.enabled}">${chat.enabled ? '停用' : '启用'}</button><button class="link-button danger-text" data-delete="${chat.id}">删除</button></div></div><div class="meta-row"><span class="tag ${chat.enabled ? 'tag-success' : ''}">${chat.enabled ? '启用' : '停用'}</span><span>${chat.date_from || '最早消息'} → ${chat.date_to || '最新消息'}</span></div></div>`).join('');
+    container.innerHTML = chats.map((chat) => {
+      const hasRule = Boolean(chat.download_filter);
+      return `<div class="task-row task-row-stack source-rule-row">
+        <div class="task-line">
+          <div><strong>${TMD.escape(chat.title || chat.chat_ref)}</strong><small>${TMD.escape(chat.chat_ref)} · 进度消息 #${chat.last_message_id}</small></div>
+          <div class="row-actions"><button class="link-button" data-rule="${chat.id}">下载规则</button><button class="link-button" data-toggle="${chat.id}" data-enabled="${chat.enabled}">${chat.enabled ? '停用' : '启用'}</button><button class="link-button danger-text" data-delete="${chat.id}">删除</button></div>
+        </div>
+        <div class="meta-row">
+          <span class="tag ${chat.enabled ? 'tag-success' : ''}">${chat.enabled ? '启用' : '停用'}</span>
+          <span class="tag ${hasRule ? 'tag-downloading' : ''}" title="${TMD.escape(chat.download_filter || '使用全局下载规则')}">${hasRule ? '自定义规则' : '全局规则'}</span>
+          <span>${chat.date_from || '最早消息'} → ${chat.date_to || '最新消息'}</span>
+        </div>
+        ${hasRule ? `<p class="rule-summary" title="${TMD.escape(chat.download_filter)}">${TMD.escape(chat.download_filter)}</p>` : ''}
+      </div>`;
+    }).join('');
   }
   renderDialogs();
+}
+
+function openRuleEditor(chatId) {
+  const chat = currentChats.find((item) => item.id === chatId);
+  if (!chat) return;
+  document.getElementById('rule-chat-title').textContent = `${chat.title || chat.chat_ref} · ${chat.chat_ref}`;
+  document.getElementById('download-filter').value = chat.download_filter || '';
+  document.getElementById('rule-date-from').value = chat.date_from || '';
+  document.getElementById('rule-date-to').value = chat.date_to || '';
+  const validation = document.getElementById('rule-validation');
+  validation.hidden = true;
+  validation.dataset.state = '';
+  const dialog = document.getElementById('rule-dialog');
+  dialog.dataset.chatId = String(chat.id);
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else dialog.setAttribute('open', '');
+}
+
+function setRuleValidation(message, state) {
+  const element = document.getElementById('rule-validation');
+  element.textContent = message;
+  element.dataset.state = state;
+  element.hidden = false;
+}
+
+async function validateCurrentRule() {
+  const expression = document.getElementById('download-filter').value.trim();
+  const button = document.getElementById('validate-rule');
+  button.disabled = true;
+  setRuleValidation('正在验证…', 'loading');
+  try {
+    await TMD.api('/api/filters/validate', { method: 'POST', body: { expression } });
+    setRuleValidation(expression ? '规则语法有效' : '留空时将使用全局下载规则', 'success');
+  } catch (err) {
+    setRuleValidation(err.message, 'error');
+  } finally { button.disabled = false; }
 }
 
 async function refreshChats() {
@@ -362,8 +452,13 @@ document.getElementById('chat-form').addEventListener('submit', async (event) =>
 });
 
 document.getElementById('chat-table').addEventListener('click', async (event) => {
+  const rule = event.target.closest('[data-rule]');
   const toggle = event.target.closest('[data-toggle]');
   const remove = event.target.closest('[data-delete]');
+  if (rule) {
+    openRuleEditor(Number(rule.dataset.rule));
+    return;
+  }
   try {
     if (toggle) {
       await TMD.api(`/api/chats/${toggle.dataset.toggle}`, { method: 'PATCH', body: { enabled: toggle.dataset.enabled !== '1' } });
@@ -374,6 +469,44 @@ document.getElementById('chat-table').addEventListener('click', async (event) =>
       await refreshChats();
     }
   } catch (err) { TMD.toast(err.message, 'error'); }
+});
+
+document.querySelectorAll('[data-rule-preset]').forEach((button) => {
+  button.addEventListener('click', () => {
+    document.getElementById('download-filter').value = button.dataset.rulePreset;
+    setRuleValidation('示例已填入，可继续修改', 'success');
+  });
+});
+document.getElementById('validate-rule').addEventListener('click', validateCurrentRule);
+document.getElementById('close-rule-dialog').addEventListener('click', () => {
+  const dialog = document.getElementById('rule-dialog');
+  if (typeof dialog.close === 'function') dialog.close();
+  else dialog.removeAttribute('open');
+});
+document.getElementById('rule-dialog').addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) event.currentTarget.close();
+});
+document.getElementById('rule-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const dialog = document.getElementById('rule-dialog');
+  const chatId = Number(dialog.dataset.chatId);
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    await TMD.api(`/api/chats/${chatId}`, {
+      method: 'PATCH',
+      body: {
+        download_filter: document.getElementById('download-filter').value.trim(),
+        date_from: document.getElementById('rule-date-from').value || null,
+        date_to: document.getElementById('rule-date-to').value || null
+      }
+    });
+    dialog.close();
+    await refreshChats();
+    TMD.toast('频道下载规则已保存', 'success');
+  } catch (err) {
+    setRuleValidation(err.message, 'error');
+  } finally { button.disabled = false; }
 });
 
 renderChats(initialChats);

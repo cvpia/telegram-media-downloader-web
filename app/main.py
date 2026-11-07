@@ -39,6 +39,7 @@ from app.schemas import (
     ChatCreateRequest,
     ChatBulkCreateRequest,
     ChatUpdateRequest,
+    FilterValidateRequest,
     LoginRequest,
     ProxySetupRequest,
     SettingsUpdate,
@@ -413,8 +414,16 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             payload.title,
             payload.date_from.isoformat() if payload.date_from else None,
             payload.date_to.isoformat() if payload.date_to else None,
+            payload.download_filter,
         )
         return chat
+
+    @app.post(
+        "/api/filters/validate",
+        dependencies=[Depends(require_admin), Depends(csrf_header)],
+    )
+    async def validate_chat_filter(payload: FilterValidateRequest) -> dict[str, Any]:
+        return {"valid": True, "expression": payload.expression}
 
     @app.post(
         "/api/chats/bulk",
@@ -433,6 +442,7 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
                     item.title,
                     item.date_from.isoformat() if item.date_from else None,
                     item.date_to.isoformat() if item.date_to else None,
+                    item.download_filter,
                 )
             )
         return {"ok": True, "count": len(created), "chats": created}
@@ -448,17 +458,35 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         request: Request,
     ) -> dict[str, Any]:
         database = service_container(request).database
-        if database.get_chat(chat_id) is None:
+        existing = database.get_chat(chat_id)
+        if existing is None:
             raise HTTPException(status_code=404, detail="频道不存在")
-        if payload.date_from and payload.date_to and payload.date_from > payload.date_to:
-            raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
-        database.update_chat_metadata(
-            chat_id,
-            title=payload.title,
-            enabled=payload.enabled,
-            date_from=payload.date_from.isoformat() if payload.date_from else None,
-            date_to=payload.date_to.isoformat() if payload.date_to else None,
+        effective_from = (
+            payload.date_from
+            if "date_from" in payload.model_fields_set
+            else existing.get("date_from")
         )
+        effective_to = (
+            payload.date_to
+            if "date_to" in payload.model_fields_set
+            else existing.get("date_to")
+        )
+        if effective_from and effective_to and str(effective_from) > str(effective_to):
+            raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+        updates: dict[str, Any] = {}
+        if "title" in payload.model_fields_set:
+            updates["title"] = payload.title
+        if "enabled" in payload.model_fields_set:
+            updates["enabled"] = payload.enabled
+        if "date_from" in payload.model_fields_set:
+            updates["date_from"] = (
+                payload.date_from.isoformat() if payload.date_from else None
+            )
+        if "date_to" in payload.model_fields_set:
+            updates["date_to"] = payload.date_to.isoformat() if payload.date_to else None
+        if "download_filter" in payload.model_fields_set:
+            updates["download_filter"] = payload.download_filter or ""
+        database.update_chat_metadata(chat_id, **updates)
         return database.get_chat(chat_id) or {}
 
     @app.delete(

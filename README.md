@@ -2,7 +2,7 @@
 
 基于 FastAPI 重写的 Telegram 媒体下载器。目标是把原项目需要手工编辑 YAML、进入终端完成首次登录的流程，改成浏览器内一次完成。
 
-当前版本：**3.3.0**
+当前版本：**3.4.0**
 
 ## 功能
 
@@ -27,6 +27,32 @@
 - API Hash、Bot Token 和代理密码使用本地密钥加密
 - 支持导入和导出旧版 YAML 配置
 - Web 页面显示当前应用版本
+
+## 频道下载规则
+
+每个下载频道可配置独立的 `download_filter`，不影响其他频道。留空时使用全局媒体类型和文件格式规则。
+
+支持字段：
+
+- `message_date` / `message_date_time`
+- `message_id` / `id`
+- `message_caption` / `caption`
+- `media_file_size` / `file_size`
+- `media_file_name` / `file_name`
+- `media_width`、`media_height`、`media_duration`
+- `media_type`、`file_extension`
+
+支持 `and` / `or` / `not`、括号、比较运算符、KB/MB/GB/TB 单位和正则表达式。示例：
+
+```text
+file_size >= 10MB and (caption == r'.*电影.*' or file_name == r'.*1080p.*')
+```
+
+```text
+message_date >= 2025.01.01 and media_type == r'(video|audio)'
+```
+
+规则采用安全解析器执行，不会运行任意 Python 代码。
 
 ## Docker 启动
 

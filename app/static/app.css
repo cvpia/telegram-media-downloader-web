@@ -379,6 +379,24 @@ code { padding: 2px 6px; border-radius: 6px; background: rgba(0, 0, 0, 0.05); co
 .toast[data-type="success"] { border-color: rgba(36, 138, 61, .18); }
 .toast[data-type="error"] { border-color: rgba(255, 59, 48, .2); }
 
+.rule-summary { margin: 9px 0 0; padding: 9px 11px; overflow: hidden; border-radius: 10px; background: var(--surface-soft); color: var(--muted-strong); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
+.rule-dialog { width: min(780px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; overflow: auto; border: 1px solid var(--line); border-radius: 26px; background: rgba(255, 255, 255, .98); box-shadow: 0 30px 90px rgba(0, 0, 0, .22); color: var(--text); }
+.rule-dialog::backdrop { background: rgba(0, 0, 0, .28); backdrop-filter: blur(8px); }
+.rule-form { display: grid; gap: 18px; padding: 26px; }
+.rule-dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.rule-dialog-heading h2 { font-size: 1.7rem; }
+.rule-dialog-heading p { margin: 5px 0 0; }
+.rule-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.rule-preset { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); color: var(--muted-strong); font-size: .74rem; cursor: pointer; }
+.rule-preset:hover { border-color: rgba(0, 113, 227, .2); background: var(--primary-soft); color: var(--primary); }
+.rule-form textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; line-height: 1.6; }
+.rule-reference { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--muted); font-size: .68rem; }
+.rule-reference code { color: var(--muted-strong); }
+.rule-validation { margin: 0; padding: 10px 12px; border-radius: 11px; background: var(--surface-soft); color: var(--muted-strong); font-size: .8rem; }
+.rule-validation[data-state="success"] { background: var(--success-soft); color: var(--success); }
+.rule-validation[data-state="error"] { background: var(--danger-soft); color: var(--danger); }
+.rule-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 2px; }
+
 @media (max-width: 960px) {
   .topbar { flex-wrap: wrap; gap: 10px; }
   .brand { min-width: 0; margin-right: auto; }
@@ -425,6 +443,10 @@ code { padding: 2px 6px; border-radius: 6px; background: rgba(0, 0, 0, 0.05); co
   .selection-bar, .sticky-actions { align-items: stretch; flex-direction: column; bottom: 8px; }
   .selection-bar .button, .sticky-actions .button { width: 100%; }
   .data-table { min-width: 720px; }
+  .rule-form { padding: 20px; }
+  .rule-dialog-heading { flex-direction: column; }
+  .rule-dialog-actions { flex-direction: column-reverse; }
+  .rule-dialog-actions .button { width: 100%; }
   .toast { right: 10px; bottom: 12px; max-width: calc(100vw - 20px); }
   input, select, textarea { min-height: 48px; font-size: 16px; }
 }

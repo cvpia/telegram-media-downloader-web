@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from app.database import Database
+from app.download_filter import build_filter_context, compile_download_filter
 from app.schemas import parse_date_bound
 from app.settings_service import SettingsService
 from app.telegram_manager import TelegramManager
@@ -322,6 +323,10 @@ class DownloaderService:
         date_to = parse_date_bound(chat.get("date_to"), end_of_day=True)
         media_types = set(self.settings.media_types())
         file_formats = self.settings.file_formats()
+        try:
+            channel_filter = compile_download_filter(chat.get("download_filter"))
+        except ValueError as exc:
+            raise ValueError(f"频道“{title}”的下载规则无效: {exc}") from exc
 
         async for message in client.get_chat_history(
             telegram_chat.id,
@@ -353,6 +358,13 @@ class DownloaderService:
             file_name = getattr(media, "file_name", None)
             extension = media_extension(media_type, media, file_name)
             if not format_is_allowed(media_type, extension, file_formats):
+                self.database.set_last_message(chat["id"], message.id)
+                continue
+
+            filter_context = build_filter_context(
+                message, media_type, media, file_name, extension
+            )
+            if not channel_filter.matches(filter_context):
                 self.database.set_last_message(chat["id"], message.id)
                 continue
 
