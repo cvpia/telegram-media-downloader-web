@@ -253,6 +253,123 @@ async def test_download_slot_applies_changed_concurrency_limit(tmp_path: Path, m
 
 
 @pytest.mark.asyncio
+async def test_download_slot_allows_ten_concurrent_downloads(monkeypatch):
+    active = 0
+    max_active = 0
+
+    async def fake_download(**kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        return True
+
+    settings = SimpleNamespace(max_concurrent_downloads=lambda: 10)
+    service = DownloaderService(SimpleNamespace(), settings, SimpleNamespace())
+    monkeypatch.setattr(service, "_perform_download_message", fake_download)
+
+    tasks = [
+        service._download_message(
+            message=SimpleNamespace(id=message_id),
+            media=SimpleNamespace(),
+            media_type="video",
+            file_name=f"{message_id}.mp4",
+            chat_id=1,
+            chat_title="Concurrent",
+        )
+        for message_id in range(15)
+    ]
+
+    assert await asyncio.gather(*tasks) == [True] * 15
+    assert max_active == 10
+
+
+@pytest.mark.asyncio
+async def test_refresh_concurrency_updates_telegram_transmission_limit():
+    limits = []
+    telegram = SimpleNamespace(
+        set_max_concurrent_transmissions=lambda limit: limits.append(limit)
+    )
+    settings = SimpleNamespace(max_concurrent_downloads=lambda: 10)
+    service = DownloaderService(SimpleNamespace(), settings, telegram)
+
+    await service.refresh_concurrency_limit()
+
+    assert limits == [10]
+
+
+@pytest.mark.asyncio
+async def test_download_chat_schedules_messages_concurrently(monkeypatch):
+    messages = [
+        SimpleNamespace(
+            id=message_id,
+            date=None,
+            caption="",
+            text="",
+            video=SimpleNamespace(file_name=f"{message_id}.mp4", file_size=1024),
+            document=None,
+            photo=None,
+            audio=None,
+            voice=None,
+            video_note=None,
+            animation=None,
+        )
+        for message_id in (3, 2, 1)
+    ]
+
+    class FakeClient:
+        async def get_chat(self, chat_ref):
+            return SimpleNamespace(id=-100123, title="Concurrent")
+
+        async def get_chat_history(self, chat_id, **kwargs):
+            for message in messages:
+                yield message
+
+    last_messages = []
+    database = SimpleNamespace(
+        update_chat_metadata=lambda *args, **kwargs: None,
+        resumable_downloads=lambda chat_id: [],
+        set_last_message=lambda chat_id, message_id: last_messages.append(
+            (chat_id, message_id)
+        ),
+    )
+    settings = SimpleNamespace(media_types=lambda: ["video"], file_formats=lambda: {})
+    telegram = SimpleNamespace(get_client=lambda: _async_value(FakeClient()))
+    service = DownloaderService(database, settings, telegram)
+    service.state = "running"
+    active = 0
+    max_active = 0
+
+    async def fake_download(**kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.05)
+        active -= 1
+        return True
+
+    monkeypatch.setattr(service, "_download_message", fake_download)
+    await asyncio.wait_for(
+        service._download_chat(
+            {
+                "id": 1,
+                "chat_ref": "-100123",
+                "title": "Concurrent",
+                "last_message_id": 0,
+                "date_from": None,
+                "date_to": None,
+                "download_filter": "",
+            }
+        ),
+        timeout=1,
+    )
+
+    assert max_active == 3
+    assert last_messages == [(1, 1), (1, 2), (1, 3)]
+
+
+@pytest.mark.asyncio
 async def test_download_chat_processes_new_messages_oldest_first(
     tmp_path: Path, monkeypatch
 ):

@@ -347,6 +347,12 @@ class DownloaderService:
         await self.stop()
 
     async def refresh_concurrency_limit(self) -> None:
+        limit = max(1, min(int(self.settings.max_concurrent_downloads()), 10))
+        update_transmissions = getattr(
+            self.telegram, "set_max_concurrent_transmissions", None
+        )
+        if callable(update_transmissions):
+            update_transmissions(limit)
         async with self._concurrency_condition:
             self._concurrency_condition.notify_all()
 
@@ -487,62 +493,74 @@ class DownloaderService:
         if not records:
             return True
         root = self.settings.download_dir().resolve()
-        for record in records:
-            await self._wait_if_paused()
-            record_id = int(record["id"])
-            destination = Path(str(record.get("file_name", ""))).resolve()
-            try:
-                destination.relative_to(root)
-            except ValueError:
-                self.database.update_download(
-                    record_id,
-                    status="failed",
-                    error="下载记录路径不在当前下载目录内，无法继续",
-                )
-                continue
+        download_tasks: list[asyncio.Task[bool]] = []
+        try:
+            for record in records:
+                await self._wait_if_paused()
+                record_id = int(record["id"])
+                destination = Path(str(record.get("file_name", ""))).resolve()
+                try:
+                    destination.relative_to(root)
+                except ValueError:
+                    self.database.update_download(
+                        record_id,
+                        status="failed",
+                        error="下载记录路径不在当前下载目录内，无法继续",
+                    )
+                    continue
 
-            try:
-                message = await client.get_messages(
-                    chat_ref, message_ids=int(record["message_id"])
-                )
-            except Exception as exc:
-                logger.exception("Unable to reload message for resume")
-                self.database.update_download(
-                    record_id,
-                    status="failed",
-                    error=f"恢复下载失败：{exc}",
-                )
-                continue
-            if message is None:
-                self.database.update_download(
-                    record_id,
-                    status="failed",
-                    error="原 Telegram 消息不存在，无法继续下载",
-                )
-                continue
+                try:
+                    message = await client.get_messages(
+                        chat_ref, message_ids=int(record["message_id"])
+                    )
+                except Exception as exc:
+                    logger.exception("Unable to reload message for resume")
+                    self.database.update_download(
+                        record_id,
+                        status="failed",
+                        error=f"恢复下载失败：{exc}",
+                    )
+                    continue
+                if message is None:
+                    self.database.update_download(
+                        record_id,
+                        status="failed",
+                        error="原 Telegram 消息不存在，无法继续下载",
+                    )
+                    continue
 
-            detected = detect_media(message)
-            if detected is None:
-                self.database.update_download(
-                    record_id,
-                    status="failed",
-                    error="原 Telegram 消息已不包含可下载媒体",
-                )
-                continue
+                detected = detect_media(message)
+                if detected is None:
+                    self.database.update_download(
+                        record_id,
+                        status="failed",
+                        error="原 Telegram 消息已不包含可下载媒体",
+                    )
+                    continue
 
-            media_type, media = detected
-            success = await self._download_message(
-                message=message,
-                media=media,
-                media_type=media_type,
-                file_name=getattr(media, "file_name", None),
-                chat_id=chat["id"],
-                chat_title=chat_title,
-                destination_override=destination,
-            )
-            if not success:
-                return False
-        return True
+                media_type, media = detected
+                download_tasks.append(
+                    asyncio.create_task(
+                        self._download_message(
+                            message=message,
+                            media=media,
+                            media_type=media_type,
+                            file_name=getattr(media, "file_name", None),
+                            chat_id=chat["id"],
+                            chat_title=chat_title,
+                            destination_override=destination,
+                        ),
+                        name=f"resume-{record_id}",
+                    )
+                )
+            results = await asyncio.gather(*download_tasks, return_exceptions=True)
+        finally:
+            for task in download_tasks:
+                if not task.done():
+                    task.cancel()
+            if download_tasks:
+                await asyncio.gather(*download_tasks, return_exceptions=True)
+        return all(not isinstance(result, BaseException) and result for result in results)
 
     async def _download_chat(self, chat: dict[str, Any]) -> None:
         client = await self.telegram.get_client()
@@ -580,53 +598,76 @@ class DownloaderService:
                 min_id=last_message_id,
             )
         ]
-        for message in reversed(pending_messages):
-            await self._wait_if_paused()
-            if message.id <= last_message_id:
-                continue
-            message_date = message.date
-            if message_date is not None:
-                if message_date.tzinfo is None:
-                    message_date = message_date.replace(tzinfo=UTC)
-                if date_from and message_date < date_from:
+        steps: list[tuple[int, asyncio.Task[bool] | None, bool]] = []
+        download_tasks: list[asyncio.Task[bool]] = []
+        try:
+            for message in reversed(pending_messages):
+                await self._wait_if_paused()
+                if message.id <= last_message_id:
                     continue
-                if date_to and message_date > date_to:
+                message_date = message.date
+                if message_date is not None:
+                    if message_date.tzinfo is None:
+                        message_date = message_date.replace(tzinfo=UTC)
+                    if date_from and message_date < date_from:
+                        steps.append((message.id, None, False))
+                        continue
+                    if date_to and message_date > date_to:
+                        steps.append((message.id, None, False))
+                        continue
+
+                detected = detect_media(message)
+                if detected is None:
+                    steps.append((message.id, None, True))
                     continue
 
-            detected = detect_media(message)
-            if detected is None:
-                self.database.set_last_message(chat["id"], message.id)
-                continue
+                media_type, media = detected
+                if media_type not in media_types:
+                    steps.append((message.id, None, True))
+                    continue
 
-            media_type, media = detected
-            if media_type not in media_types:
-                self.database.set_last_message(chat["id"], message.id)
-                continue
+                file_name = getattr(media, "file_name", None)
+                extension = media_extension(media_type, media, file_name)
+                if not format_is_allowed(media_type, extension, file_formats):
+                    steps.append((message.id, None, True))
+                    continue
 
-            file_name = getattr(media, "file_name", None)
-            extension = media_extension(media_type, media, file_name)
-            if not format_is_allowed(media_type, extension, file_formats):
-                self.database.set_last_message(chat["id"], message.id)
-                continue
+                filter_context = build_filter_context(
+                    message, media_type, media, file_name, extension
+                )
+                if not channel_filter.matches(filter_context):
+                    steps.append((message.id, None, True))
+                    continue
 
-            filter_context = build_filter_context(
-                message, media_type, media, file_name, extension
-            )
-            if not channel_filter.matches(filter_context):
-                self.database.set_last_message(chat["id"], message.id)
-                continue
+                task = asyncio.create_task(
+                    self._download_message(
+                        message=message,
+                        media=media,
+                        media_type=media_type,
+                        file_name=file_name,
+                        chat_id=chat["id"],
+                        chat_title=str(title),
+                    ),
+                    name=f"download-{chat['id']}-{message.id}",
+                )
+                download_tasks.append(task)
+                steps.append((message.id, task, True))
 
-            success = await self._download_message(
-                message=message,
-                media=media,
-                media_type=media_type,
-                file_name=file_name,
-                chat_id=chat["id"],
-                chat_title=str(title),
-            )
-            if not success:
+            results = await asyncio.gather(*download_tasks, return_exceptions=True)
+        finally:
+            for task in download_tasks:
+                if not task.done():
+                    task.cancel()
+            if download_tasks:
+                await asyncio.gather(*download_tasks, return_exceptions=True)
+
+        result_iter = iter(results)
+        for message_id, task, advances_checkpoint in steps:
+            result = next(result_iter) if task is not None else None
+            if task is not None and (isinstance(result, BaseException) or not result):
                 return
-            self.database.set_last_message(chat["id"], message.id)
+            if advances_checkpoint:
+                self.database.set_last_message(chat["id"], message_id)
 
     async def _download_message(
         self,

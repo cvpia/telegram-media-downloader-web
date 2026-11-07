@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -31,6 +32,39 @@ class FakeClient:
         if self.send_code_calls <= self.failures:
             raise BadMsgNotification(16)
         return SimpleNamespace(phone_code_hash="phone-hash", type="app")
+
+
+def test_new_client_uses_configured_max_concurrent_transmissions(monkeypatch):
+    class CapturingClient:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    settings = SimpleNamespace(
+        max_concurrent_downloads=lambda: 10,
+        get_proxy_url=lambda: "",
+    )
+    manager = TelegramManager(settings=settings, session_dir=Path("."))
+    monkeypatch.setattr("app.telegram_manager.Client", CapturingClient)
+
+    client = manager._new_client("downloader", 1, "hash")
+
+    assert client.kwargs["max_concurrent_transmissions"] == 10
+
+
+def test_set_max_concurrent_transmissions_updates_live_client():
+    settings = SimpleNamespace(max_concurrent_downloads=lambda: 10)
+    manager = TelegramManager(settings=settings, session_dir=Path("."))
+    client = SimpleNamespace(
+        max_concurrent_transmissions=1,
+        get_file_semaphore=asyncio.Semaphore(1),
+    )
+    manager._client = client
+
+    manager.set_max_concurrent_transmissions(10)
+
+    assert client.max_concurrent_transmissions == 10
+    assert client.get_file_semaphore._value == 10
 
 
 

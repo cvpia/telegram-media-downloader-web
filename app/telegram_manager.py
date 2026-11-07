@@ -84,6 +84,18 @@ class TelegramManager:
             proxy["password"] = unquote(parsed.password)
         return proxy
 
+    def _download_concurrency(self) -> int:
+        if self.settings is None:
+            return 1
+        return max(1, min(int(self.settings.max_concurrent_downloads()), 10))
+
+    def set_max_concurrent_transmissions(self, limit: int) -> None:
+        limit = max(1, min(int(limit), 10))
+        if self._client is None:
+            return
+        self._client.max_concurrent_transmissions = limit
+        self._client.get_file_semaphore = asyncio.Semaphore(limit)
+
 
     def _new_client(self, name: str, api_id: int, api_hash: str) -> Client:
         return Client(
@@ -94,6 +106,7 @@ class TelegramManager:
             no_updates=True,
             proxy=self.parse_proxy(self.settings.get_proxy_url()),
             sleep_threshold=10,
+            max_concurrent_transmissions=self._download_concurrency(),
         )
 
     @staticmethod
