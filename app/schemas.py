@@ -149,6 +149,10 @@ class ChatCreateRequest(BaseModel):
         return self
 
 
+class ChatBulkCreateRequest(BaseModel):
+    chats: list[ChatCreateRequest] = Field(min_length=1, max_length=200)
+
+
 class ChatUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=256)
     enabled: bool | None = None

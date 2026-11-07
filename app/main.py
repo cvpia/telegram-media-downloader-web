@@ -31,6 +31,7 @@ from app.network import NetworkTestError, test_network_connection
 from app.schemas import (
     AdminSetupRequest,
     ChatCreateRequest,
+    ChatBulkCreateRequest,
     ChatUpdateRequest,
     LoginRequest,
     ProxySetupRequest,
@@ -372,6 +373,28 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             payload.date_to.isoformat() if payload.date_to else None,
         )
         return chat
+
+    @app.post(
+        "/api/chats/bulk",
+        dependencies=[Depends(require_admin), Depends(csrf_header)],
+    )
+    async def create_chats_bulk(
+        payload: ChatBulkCreateRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        database = service_container(request).database
+        created = []
+        for item in payload.chats:
+            created.append(
+                database.upsert_chat(
+                    item.chat_ref,
+                    item.title,
+                    item.date_from.isoformat() if item.date_from else None,
+                    item.date_to.isoformat() if item.date_to else None,
+                )
+            )
+        return {"ok": True, "count": len(created), "chats": created}
+
 
     @app.patch(
         "/api/chats/{chat_id}",

@@ -2,27 +2,48 @@
 {% block title %}频道管理 · {{ app_name }}{% endblock %}
 {% block content %}
 <section class="content-heading">
-  <div><div class="eyebrow">SOURCES</div><h1>频道管理</h1><p class="muted">添加 Telegram 频道、群组或机器人会话，并控制是否参与下载。</p></div>
+  <div><div class="eyebrow">SOURCES</div><h1>频道管理</h1><p class="muted">自动读取当前 Telegram 账号的频道和群组，搜索后勾选即可批量添加。</p></div>
   <a class="button button-primary" href="/">返回下载中心</a>
 </section>
 
 {% if not telegram_connected %}
-<div class="notice notice-warning"><strong>Telegram 尚未登录。</strong> 可以手动填写频道，但读取会话列表前需要完成登录。<a href="/setup">继续配置</a></div>
+<div class="notice notice-warning"><strong>Telegram 尚未登录。</strong> 可以手动填写频道，但自动读取会话列表前需要完成登录。<a href="/setup">继续配置</a></div>
 {% endif %}
 
-<section class="two-column-layout">
+<section class="panel dialogs-panel">
+  <div class="panel-heading">
+    <div><h2>账号频道与会话</h2><p class="muted">进入页面后自动从 Telegram 账号读取</p></div>
+    <button class="button button-ghost button-small" id="refresh-dialogs" type="button">刷新列表</button>
+  </div>
+  <div class="dialog-toolbar">
+    <label class="search-field"><span class="sr-only">搜索频道</span><input id="dialog-search" type="search" placeholder="搜索频道、群组或用户名…" autocomplete="off"></label>
+    <span class="tag" id="dialog-count">等待读取</span>
+  </div>
+  <div id="dialog-list" class="dialog-list" aria-live="polite">
+    <p class="empty-state">正在读取账号会话…</p>
+  </div>
+  <div class="selection-bar" id="selection-bar" hidden>
+    <span>已选择 <strong id="selected-count">0</strong> 个会话</span>
+    <button class="button button-primary" id="add-selected" type="button">添加所选频道</button>
+  </div>
+</section>
+
+<section class="two-column-layout chats-layout">
   <article class="panel">
-    <div class="panel-heading"><div><h2>添加频道</h2><p class="muted">重复添加会更新现有配置</p></div></div>
-    <form id="chat-form" class="stack-form">
-      <label><span>频道 / 群组</span><input id="chat-ref" type="text" list="dialog-options" placeholder="@channel 或 -1001234567890" required><datalist id="dialog-options"></datalist></label>
-      <label><span>显示名称（可选）</span><input id="chat-title" type="text" placeholder="不填写时自动读取"></label>
-      <div class="form-grid"><label><span>开始日期</span><input id="date-from" type="date"></label><label><span>结束日期</span><input id="date-to" type="date"></label></div>
-      <div class="button-row"><button class="button button-ghost" type="button" id="load-dialogs">读取我的会话</button><button class="button button-primary" type="submit">保存频道</button></div>
-      <p class="form-error" data-error hidden></p>
-    </form>
+    <div class="panel-heading"><div><h2>手动添加</h2><p class="muted">列表中没有的频道可以手动填写</p></div></div>
+    <details class="manual-add" open>
+      <summary>填写频道 ID 或用户名</summary>
+      <form id="chat-form" class="stack-form">
+        <label><span>频道 / 群组</span><input id="chat-ref" type="text" list="dialog-options" placeholder="@channel 或 -1001234567890" required><datalist id="dialog-options"></datalist></label>
+        <label><span>显示名称（可选）</span><input id="chat-title" type="text" placeholder="不填写时自动读取"></label>
+        <div class="form-grid"><label><span>开始日期</span><input id="date-from" type="date"></label><label><span>结束日期</span><input id="date-to" type="date"></label></div>
+        <button class="button button-primary" type="submit">保存频道</button>
+        <p class="form-error" data-error hidden></p>
+      </form>
+    </details>
   </article>
   <article class="panel">
-    <div class="panel-heading"><div><h2>已配置来源</h2><p class="muted">下载进度消息 ID 会自动保存</p></div></div>
+    <div class="panel-heading"><div><h2>已配置来源</h2><p class="muted">下载进度消息 ID 会自动保存</p></div><a class="text-link" href="/">下载中心</a></div>
     <div id="chat-table" class="task-list"></div>
   </article>
 </section>
@@ -30,18 +51,115 @@
 {% block scripts %}
 <script>
 const initialChats = {{ chats | tojson }};
-function renderChats(chats) {
-  const container = document.getElementById('chat-table');
-  if (!chats.length) {
-    container.innerHTML = '<p class="empty-state">尚未添加频道</p>';
+const telegramConnected = {{ 'true' if telegram_connected else 'false' }};
+let allDialogs = [];
+let configuredRefs = new Set();
+
+function dialogRef(dialog) {
+  return dialog.username ? `@${dialog.username}` : String(dialog.id);
+}
+
+function typeLabel(type) {
+  return ({
+    channel: '频道',
+    supergroup: '超级群',
+    group: '群组',
+    bot: '机器人',
+    private: '私聊'
+  })[type] || '会话';
+}
+
+function updateConfiguredRefs(chats) {
+  configuredRefs = new Set(chats.map((chat) => chat.chat_ref));
+}
+
+function renderDialogs() {
+  const list = document.getElementById('dialog-list');
+  const query = document.getElementById('dialog-search').value.trim().toLowerCase();
+  const filtered = allDialogs.filter((dialog) =>
+    !query || dialog.title.toLowerCase().includes(query) || dialog.username.toLowerCase().includes(query) || String(dialog.id).includes(query)
+  );
+  document.getElementById('dialog-count').textContent = query ? `${filtered.length} / ${allDialogs.length}` : `${allDialogs.length} 个会话`;
+  if (!filtered.length) {
+    list.innerHTML = `<p class="empty-state">${allDialogs.length ? '没有匹配的频道' : '账号中没有可读取的会话'}</p>`;
+    updateSelection();
     return;
   }
-  container.innerHTML = chats.map((chat) => `<div class="task-row task-row-stack"><div class="task-line"><div><strong>${TMD.escape(chat.title || chat.chat_ref)}</strong><small>${TMD.escape(chat.chat_ref)} · 进度消息 #${chat.last_message_id}</small></div><div class="row-actions"><button class="link-button" data-toggle="${chat.id}" data-enabled="${chat.enabled}">${chat.enabled ? '停用' : '启用'}</button><button class="link-button danger-text" data-delete="${chat.id}">删除</button></div></div><div class="meta-row"><span class="tag ${chat.enabled ? 'tag-success' : ''}">${chat.enabled ? '启用' : '停用'}</span><span>${chat.date_from || '最早消息'} → ${chat.date_to || '最新消息'}</span></div></div>`).join('');
+  list.innerHTML = filtered.map((dialog) => {
+    const ref = dialogRef(dialog);
+    const added = configuredRefs.has(ref);
+    return `<label class="dialog-row ${added ? 'is-added' : ''}" data-type="${TMD.escape(dialog.type)}">
+      <input type="checkbox" value="${TMD.escape(ref)}" ${added ? 'disabled' : ''}>
+      <span class="dialog-main"><strong>${TMD.escape(dialog.title)}</strong><small>${TMD.escape(ref)} · ID ${TMD.escape(dialog.id)}</small></span>
+      <span class="tag">${added ? '已添加' : TMD.escape(typeLabel(dialog.type))}</span>
+    </label>`;
+  }).join('');
+  updateSelection();
 }
+
+function updateSelection() {
+  const selected = [...document.querySelectorAll('#dialog-list input[type="checkbox"]:checked:not(:disabled)')];
+  document.getElementById('selected-count').textContent = selected.length;
+  document.getElementById('selection-bar').hidden = selected.length === 0;
+  document.getElementById('add-selected').disabled = selected.length === 0;
+}
+
+function renderChats(chats) {
+  const container = document.getElementById('chat-table');
+  updateConfiguredRefs(chats);
+  if (!chats.length) {
+    container.innerHTML = '<p class="empty-state">尚未添加频道</p>';
+  } else {
+    container.innerHTML = chats.map((chat) => `<div class="task-row task-row-stack"><div class="task-line"><div><strong>${TMD.escape(chat.title || chat.chat_ref)}</strong><small>${TMD.escape(chat.chat_ref)} · 进度消息 #${chat.last_message_id}</small></div><div class="row-actions"><button class="link-button" data-toggle="${chat.id}" data-enabled="${chat.enabled}">${chat.enabled ? '停用' : '启用'}</button><button class="link-button danger-text" data-delete="${chat.id}">删除</button></div></div><div class="meta-row"><span class="tag ${chat.enabled ? 'tag-success' : ''}">${chat.enabled ? '启用' : '停用'}</span><span>${chat.date_from || '最早消息'} → ${chat.date_to || '最新消息'}</span></div></div>`).join('');
+  }
+  renderDialogs();
+}
+
 async function refreshChats() {
   const chats = await TMD.api('/api/chats');
   renderChats(chats);
 }
+
+async function loadDialogs() {
+  if (!telegramConnected) return;
+  const button = document.getElementById('refresh-dialogs');
+  const list = document.getElementById('dialog-list');
+  button.disabled = true;
+  button.textContent = '读取中…';
+  list.innerHTML = '<p class="empty-state">正在读取账号会话，请稍候…</p>';
+  try {
+    allDialogs = await TMD.api('/api/telegram/dialogs');
+    document.getElementById('dialog-options').innerHTML = allDialogs.map((dialog) => `<option value="${TMD.escape(dialogRef(dialog))}">${TMD.escape(dialog.title)}</option>`).join('');
+    TMD.toast(`已自动读取 ${allDialogs.length} 个账号会话`, 'success');
+    renderDialogs();
+  } catch (err) {
+    list.innerHTML = `<p class="empty-state">读取失败：${TMD.escape(err.message)}</p>`;
+    document.getElementById('dialog-count').textContent = '读取失败';
+    TMD.toast(err.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = '刷新列表';
+  }
+}
+
+document.getElementById('refresh-dialogs').addEventListener('click', loadDialogs);
+document.getElementById('dialog-search').addEventListener('input', renderDialogs);
+document.getElementById('dialog-list').addEventListener('change', updateSelection);
+document.getElementById('add-selected').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const refs = [...document.querySelectorAll('#dialog-list input[type="checkbox"]:checked:not(:disabled)')].map((input) => input.value);
+  const chats = allDialogs.filter((dialog) => refs.includes(dialogRef(dialog))).map((dialog) => ({ chat_ref: dialogRef(dialog), title: dialog.title }));
+  if (!chats.length) return;
+  button.disabled = true;
+  button.textContent = '正在添加…';
+  try {
+    const result = await TMD.api('/api/chats/bulk', { method: 'POST', body: { chats } });
+    TMD.toast(`已添加 ${result.count} 个频道`, 'success');
+    await refreshChats();
+  } catch (err) { TMD.toast(err.message, 'error'); }
+  finally { button.disabled = false; button.textContent = '添加所选频道'; updateSelection(); }
+});
+
 document.getElementById('chat-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -59,15 +177,7 @@ document.getElementById('chat-form').addEventListener('submit', async (event) =>
     TMD.toast('频道已保存', 'success');
   } catch (err) { error.textContent = err.message; error.hidden = false; }
 });
-document.getElementById('load-dialogs').addEventListener('click', async (event) => {
-  event.currentTarget.disabled = true;
-  try {
-    const dialogs = await TMD.api('/api/telegram/dialogs');
-    document.getElementById('dialog-options').innerHTML = dialogs.map((dialog) => `<option value="${TMD.escape(dialog.username ? '@' + dialog.username : dialog.id)}">${TMD.escape(dialog.title)}</option>`).join('');
-    TMD.toast(`已读取 ${dialogs.length} 个会话`, 'success');
-  } catch (err) { TMD.toast(err.message, 'error'); }
-  finally { event.currentTarget.disabled = false; }
-});
+
 document.getElementById('chat-table').addEventListener('click', async (event) => {
   const toggle = event.target.closest('[data-toggle]');
   const remove = event.target.closest('[data-delete]');
@@ -82,6 +192,8 @@ document.getElementById('chat-table').addEventListener('click', async (event) =>
     }
   } catch (err) { TMD.toast(err.message, 'error'); }
 });
+
 renderChats(initialChats);
+if (telegramConnected) loadDialogs();
 </script>
 {% endblock %}

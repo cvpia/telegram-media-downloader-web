@@ -207,6 +207,8 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     chats_page = client.get("/chats")
     assert chats_page.status_code == 200
     assert "频道管理" in chats_page.text
+    assert "账号频道与会话" in chats_page.text
+    assert "添加所选频道" in chats_page.text
     assert token
 
 def test_proxy_is_first_setup_step_and_can_be_skipped(client: TestClient):
@@ -292,3 +294,19 @@ def test_authenticated_user_can_retest_saved_proxy(client: TestClient, monkeypat
     )
     assert response.status_code == 200, response.text
     assert response.json()["latency_ms"] == 45
+def test_bulk_chat_creation(client: TestClient):
+    token = initialize_admin(client)
+    response = client.post(
+        "/api/chats/bulk",
+        json={
+            "chats": [
+                {"chat_ref": "@channel_one", "title": "Channel One"},
+                {"chat_ref": "-1001234567890", "title": "Channel Two"},
+            ]
+        },
+        headers={"X-CSRF-Token": token},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["count"] == 2
+    assert len(client.get("/api/chats").json()) == 2

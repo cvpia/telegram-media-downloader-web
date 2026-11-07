@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from pyrogram import Client
+from pyrogram import Client, raw, utils
 from pyrogram.errors import (
     BadMsgNotification,
     FloodWait,
@@ -253,23 +253,128 @@ class TelegramManager:
             self._client = client
             return client
 
-    async def list_dialogs(self, limit: int = 200) -> list[dict[str, Any]]:
+    @staticmethod
+    def _dialog_info(peer: Any, users: dict, chats: dict) -> dict[str, Any] | None:
+        if isinstance(peer, raw.types.PeerUser):
+            user = users.get(peer.user_id)
+            if user is None:
+                return None
+            title = " ".join(
+                part for part in (user.first_name, user.last_name) if part
+            ) or user.username or f"User {user.id}"
+            return {
+                "id": str(utils.get_peer_id(peer)),
+                "title": title,
+                "type": "bot" if getattr(user, "bot", False) else "private",
+                "username": user.username or "",
+            }
+        if isinstance(peer, raw.types.PeerChat):
+            chat = chats.get(peer.chat_id)
+            if chat is None:
+                return None
+            return {
+                "id": str(utils.get_peer_id(peer)),
+                "title": chat.title or f"Chat {chat.id}",
+                "type": "group",
+                "username": "",
+            }
+        if isinstance(peer, raw.types.PeerChannel):
+            chat = chats.get(peer.channel_id)
+            if chat is None:
+                return None
+            return {
+                "id": str(utils.get_peer_id(peer)),
+                "title": chat.title or f"Channel {chat.id}",
+                "type": "supergroup" if getattr(chat, "megagroup", False) else "channel",
+                "username": getattr(chat, "username", "") or "",
+            }
+        return None
+
+    @staticmethod
+    def _input_peer(peer: Any, users: dict, chats: dict) -> Any:
+        if isinstance(peer, raw.types.PeerUser):
+            user = users.get(peer.user_id)
+            if user is not None:
+                return raw.types.InputPeerUser(
+                    user_id=user.id, access_hash=user.access_hash
+                )
+        if isinstance(peer, raw.types.PeerChat):
+            chat = chats.get(peer.chat_id)
+            if chat is not None:
+                return raw.types.InputPeerChat(chat_id=chat.id)
+        if isinstance(peer, raw.types.PeerChannel):
+            chat = chats.get(peer.channel_id)
+            if chat is not None:
+                return raw.types.InputPeerChannel(
+                    channel_id=chat.id, access_hash=chat.access_hash
+                )
+        return raw.types.InputPeerEmpty()
+
+    async def list_dialogs(self, limit: int = 300) -> list[dict[str, Any]]:
         client = await self.get_client()
         dialogs: list[dict[str, Any]] = []
-        async for dialog in client.get_dialogs(limit=limit):
-            chat = dialog.chat
-            if chat is None:
-                continue
-            dialogs.append(
-                {
-                    "id": str(chat.id),
-                    "title": getattr(chat, "title", None)
-                    or getattr(chat, "username", None)
-                    or "未命名会话",
-                    "type": str(getattr(chat, "type", "")),
-                    "username": getattr(chat, "username", "") or "",
-                }
+        seen_ids: set[str] = set()
+        offset_date = 0
+        offset_id = 0
+        offset_peer = raw.types.InputPeerEmpty()
+
+        while len(dialogs) < limit:
+            page_size = min(100, limit - len(dialogs))
+            response = await client.invoke(
+                raw.functions.messages.GetDialogs(
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_peer=offset_peer,
+                    limit=page_size,
+                    hash=0,
+                ),
+                sleep_threshold=30,
             )
+            users = {user.id: user for user in response.users}
+            chats = {chat.id: chat for chat in response.chats}
+            messages = {message.id: message for message in response.messages}
+            page_dialogs = 0
+            new_dialogs = 0
+            for dialog in response.dialogs:
+                if not isinstance(dialog, raw.types.Dialog):
+                    continue
+                page_dialogs += 1
+                item = self._dialog_info(dialog.peer, users, chats)
+                if item is not None and item["id"] not in seen_ids:
+                    seen_ids.add(item["id"])
+                    dialogs.append(item)
+                    new_dialogs += 1
+            if page_dialogs < page_size or new_dialogs == 0:
+                break
+            last_dialog = next(
+                (
+                    dialog
+                    for dialog in reversed(response.dialogs)
+                    if isinstance(dialog, raw.types.Dialog)
+                ),
+                None,
+            )
+            if last_dialog is None or not last_dialog.top_message:
+                break
+            offset_id = int(last_dialog.top_message)
+            last_message = messages.get(offset_id)
+            last_message_date = (
+                getattr(last_message, "date", None) if last_message is not None else None
+            )
+            if isinstance(last_message_date, int):
+                offset_date = last_message_date
+            elif last_message_date is not None:
+                offset_date = utils.datetime_to_timestamp(last_message_date)
+            else:
+                offset_date = 0
+            offset_peer = self._input_peer(last_dialog.peer, users, chats)
+
+        dialogs.sort(
+            key=lambda item: (
+                item["type"] not in {"channel", "supergroup", "group"},
+                item["title"].lower(),
+            )
+        )
         return dialogs
 
     async def logout(self) -> None:

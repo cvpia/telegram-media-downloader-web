@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from pyrogram.errors import BadMsgNotification
+from pyrogram import raw
 
 from app.telegram_manager import TelegramManager
 
@@ -28,6 +29,41 @@ class FakeClient:
             raise BadMsgNotification(16)
         return SimpleNamespace(phone_code_hash="phone-hash", type="app")
 
+
+
+def test_dialog_info_for_channel_and_user():
+    channel = SimpleNamespace(
+        id=123,
+        title="Private Channel",
+        username="private_channel",
+        megagroup=False,
+    )
+    channel_info = TelegramManager._dialog_info(
+        raw.types.PeerChannel(channel_id=123),
+        {},
+        {123: channel},
+    )
+    assert channel_info == {
+        "id": "-1000000000123",
+        "title": "Private Channel",
+        "type": "channel",
+        "username": "private_channel",
+    }
+
+    user = SimpleNamespace(
+        id=456,
+        first_name="Test",
+        last_name="User",
+        username="testuser",
+        bot=False,
+    )
+    user_info = TelegramManager._dialog_info(
+        raw.types.PeerUser(user_id=456),
+        {456: user},
+        {},
+    )
+    assert user_info["type"] == "private"
+    assert user_info["title"] == "Test User"
 
 
 def test_clock_sync_codes_are_detected():

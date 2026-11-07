@@ -8,4 +8,4 @@ cryptography==44.0.0
 itsdangerous==2.2.0
 httpx[socks]==0.28.1
 https://github.com/tangyoha/pyrogram/archive/refs/heads/patch.zip
-TgCrypto==1.2.2; python_version < "3.13"
+pyTgCrypto==1.2.12
