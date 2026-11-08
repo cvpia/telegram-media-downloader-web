@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import mimetypes
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.bot_service import BotService
@@ -69,6 +71,25 @@ from app.version import APP_NAME, APP_VERSION
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(PROJECT_ROOT / "app" / "templates"))
+
+
+class SelectiveGZipMiddleware:
+    """Compress lightweight text responses without touching media streams."""
+
+    def __init__(self, app: Any, minimum_size: int = 512, compresslevel: int = 5):
+        self.app = app
+        self.gzip = GZipMiddleware(
+            app, minimum_size=minimum_size, compresslevel=compresslevel
+        )
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        path = str(scope.get("path", ""))
+        if scope.get("type") == "http" and (
+            path == "/api/events" or path.endswith("/media")
+        ):
+            await self.app(scope, receive, send)
+            return
+        await self.gzip(scope, receive, send)
 
 
 @dataclass
@@ -194,14 +215,25 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         same_site="lax",
         https_only=False,
     )
+    app.add_middleware(SelectiveGZipMiddleware, minimum_size=512, compresslevel=5)
 
     @app.middleware("http")
-    async def security_headers(request: Request, call_next):
+    async def performance_and_security_headers(request: Request, call_next):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        path = request.url.path
+        content_type = response.headers.get("content-type", "")
+        if path.startswith("/static/"):
+            response.headers.setdefault(
+                "Cache-Control", "public, max-age=31536000, immutable"
+            )
+        elif "text/html" in content_type:
+            response.headers.setdefault("Cache-Control", "no-cache")
+        elif path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "app" / "static")), name="static")
@@ -768,6 +800,7 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             "pause": downloader.pause,
             "resume": downloader.resume,
             "stop": downloader.stop,
+            "retry_failed": downloader.retry_failed,
         }
         handler = actions.get(action)
         if handler is None:
@@ -782,11 +815,19 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         downloader = service_container(request).downloader
 
         async def stream():
+            last_payload: str | None = None
+            last_heartbeat = time.monotonic()
             while True:
                 if await request.is_disconnected():
                     break
                 payload = json.dumps(downloader.snapshot(), ensure_ascii=False)
-                yield f"data: {payload}\n\n"
+                if payload != last_payload:
+                    yield f"data: {payload}\n\n"
+                    last_payload = payload
+                    last_heartbeat = time.monotonic()
+                elif time.monotonic() - last_heartbeat >= 15:
+                    yield ": keep-alive\n\n"
+                    last_heartbeat = time.monotonic()
                 await asyncio.sleep(1)
 
         return StreamingResponse(

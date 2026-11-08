@@ -2,7 +2,7 @@
 
 基于 FastAPI 重写的 Telegram 媒体下载器。目标是把原项目需要手工编辑 YAML、进入终端完成首次登录的流程，改成浏览器内一次完成。
 
-当前版本：**3.7.1**
+当前版本：**3.8.0**
 
 ## 功能
 
@@ -23,7 +23,9 @@
 - 下载历史只显示已结束任务，图片和视频缩略图均按需加载，并可在统一页面内播放器中放大图片、播放视频
 - 下载中断后保留临时文件，重新开始时自动恢复历史未完成任务并从已下载的分块继续传输
 - 最大并发下载数同时作用于频道内与频道间任务，可在 1 至 10 路之间即时调整
-- Telegram 限流时自动降低传输并发并重试，长时间无进度会停止并保留临时文件
+- 单文件失败自动指数退避重试，重试前刷新 Telegram 文件引用并保留分块续传
+- 下载改为有界批处理，连续失败会自动熔断暂停，避免整批队列持续产生错误记录
+- 页面启用文本压缩、静态资源长期缓存、SSE 增量推送和关键区域局部渲染
 - 下载监控显示实时速度、进度、剩余时间和磁盘资源
 - 苹果风格浅色界面与配置向导导航
 - 支持搜索、多选和批量添加频道
@@ -80,7 +82,7 @@ message_date >= 2025.01.01 and media_type == r'(video|audio)'
 Docker Hub 镜像：
 
 ```bash
-docker pull xxoo520zls/telegram-media-downloader-web:3.7.1
+docker pull xxoo520zls/telegram-media-downloader-web:3.8.0
 ```
 
 也可以直接使用 Compose 构建并启动（配置中的 `image` 会同步标记本地构建结果）：
@@ -115,7 +117,7 @@ docker run -d \
   -v "$PWD/data:/data" \
   -v "$PWD/downloads:/downloads" \
   --restart unless-stopped \
-  xxoo520zls/telegram-media-downloader-web:3.7.1
+  xxoo520zls/telegram-media-downloader-web:3.8.0
 ```
 
 ## 本地开发

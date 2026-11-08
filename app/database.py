@@ -31,8 +31,8 @@ class Database:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA synchronous=NORMAL")
         return connection
 
     def initialize(self) -> None:
@@ -67,8 +67,11 @@ class Database:
             media_type TEXT NOT NULL DEFAULT '',
             total_size INTEGER NOT NULL DEFAULT 0,
             downloaded_size INTEGER NOT NULL DEFAULT 0,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL,
             error TEXT,
+            error_code TEXT,
+            next_retry_at TEXT,
             started_at TEXT NOT NULL,
             finished_at TEXT,
             FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE,
@@ -94,22 +97,37 @@ class Database:
 
         CREATE INDEX IF NOT EXISTS idx_downloads_started_at
             ON downloads(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_downloads_status_started_at
+            ON downloads(status, started_at DESC);
         CREATE INDEX IF NOT EXISTS idx_forward_rules_enabled
             ON forward_rules(enabled);
         """
         with self._lock, self._connect() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(schema)
-            columns = {
+            chat_columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(chats)")
             }
-            if "download_filter" not in columns:
+            if "download_filter" not in chat_columns:
                 connection.execute(
                     "ALTER TABLE chats ADD COLUMN download_filter TEXT NOT NULL DEFAULT ''"
                 )
-            if "visible" not in columns:
+            if "visible" not in chat_columns:
                 connection.execute(
                     "ALTER TABLE chats ADD COLUMN visible INTEGER NOT NULL DEFAULT 1"
                 )
+            download_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(downloads)")
+            }
+            if "attempt_count" not in download_columns:
+                connection.execute(
+                    "ALTER TABLE downloads ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "error_code" not in download_columns:
+                connection.execute("ALTER TABLE downloads ADD COLUMN error_code TEXT")
+            if "next_retry_at" not in download_columns:
+                connection.execute("ALTER TABLE downloads ADD COLUMN next_retry_at TEXT")
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self._lock, self._connect() as connection:
@@ -405,16 +423,17 @@ class Database:
                 """
                 INSERT INTO downloads(
                     chat_id, chat_title, message_id, file_name, media_type,
-                    total_size, downloaded_size, status, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, 'downloading', ?)
+                    total_size, downloaded_size, attempt_count, status, started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'downloading', ?)
                 ON CONFLICT(chat_id, message_id) DO UPDATE SET
                     chat_title = excluded.chat_title,
                     file_name = excluded.file_name,
                     media_type = excluded.media_type,
                     total_size = excluded.total_size,
-                    downloaded_size = 0,
                     status = 'downloading',
                     error = NULL,
+                    error_code = NULL,
+                    next_retry_at = NULL,
                     started_at = excluded.started_at,
                     finished_at = NULL
                 """,
@@ -443,7 +462,10 @@ class Database:
         status: str | None = None,
         downloaded_size: int | None = None,
         file_name: str | None = None,
-        error: str | None = None,
+        error: str | None | object = _UNSET,
+        error_code: str | None | object = _UNSET,
+        attempt_count: int | None = None,
+        next_retry_at: str | None | object = _UNSET,
     ) -> None:
         fields: list[str] = []
         values: list[Any] = []
@@ -453,15 +475,26 @@ class Database:
             if status in {"completed", "skipped", "failed"}:
                 fields.append("finished_at = ?")
                 values.append(utc_now())
+            else:
+                fields.append("finished_at = NULL")
         if downloaded_size is not None:
             fields.append("downloaded_size = ?")
             values.append(downloaded_size)
         if file_name is not None:
             fields.append("file_name = ?")
             values.append(file_name)
-        if error is not None:
+        if attempt_count is not None:
+            fields.append("attempt_count = ?")
+            values.append(max(0, int(attempt_count)))
+        if error is not _UNSET:
             fields.append("error = ?")
             values.append(error)
+        if error_code is not _UNSET:
+            fields.append("error_code = ?")
+            values.append(error_code)
+        if next_retry_at is not _UNSET:
+            fields.append("next_retry_at = ?")
+            values.append(next_retry_at)
         if not fields:
             return
         values.append(download_id)
@@ -482,12 +515,43 @@ class Database:
             rows = connection.execute(
                 """
                 SELECT * FROM downloads
-                WHERE chat_id = ? AND status IN ('downloading', 'failed')
+                WHERE chat_id = ? AND status IN ('downloading', 'retry_wait')
                 ORDER BY message_id ASC
                 """,
                 (chat_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def download_counts(self) -> dict[str, int]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM downloads GROUP BY status"
+            ).fetchall()
+        return {str(row["status"]): int(row["count"]) for row in rows}
+
+    def requeue_failed_downloads(self, limit: int = 100) -> int:
+        """Requeue a bounded number of terminal failures for a manual retry."""
+        limit = max(1, min(int(limit), 500))
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE downloads
+                SET status = 'retry_wait',
+                    error = NULL,
+                    error_code = NULL,
+                    next_retry_at = NULL,
+                    attempt_count = 0,
+                    finished_at = NULL
+                WHERE id IN (
+                    SELECT id FROM downloads
+                    WHERE status = 'failed'
+                    ORDER BY finished_at DESC, id DESC
+                    LIMIT ?
+                )
+                """,
+                (limit,),
+            )
+            return max(0, cursor.rowcount)
 
     def recent_downloads(
         self,
@@ -496,7 +560,11 @@ class Database:
         *,
         terminal_only: bool = False,
     ) -> list[dict[str, Any]]:
-        where = "WHERE status <> 'downloading'" if terminal_only else ""
+        where = (
+            "WHERE status NOT IN ('downloading', 'retry_wait')"
+            if terminal_only
+            else ""
+        )
         with self._lock, self._connect() as connection:
             rows = connection.execute(
                 f"SELECT * FROM downloads {where} ORDER BY started_at DESC LIMIT ? OFFSET ?",
@@ -505,7 +573,11 @@ class Database:
         return [dict(row) for row in rows]
 
     def count_downloads(self, *, terminal_only: bool = False) -> int:
-        where = " WHERE status <> 'downloading'" if terminal_only else ""
+        where = (
+            " WHERE status NOT IN ('downloading', 'retry_wait')"
+            if terminal_only
+            else ""
+        )
         with self._lock, self._connect() as connection:
             row = connection.execute(
                 f"SELECT COUNT(*) AS count FROM downloads{where}"

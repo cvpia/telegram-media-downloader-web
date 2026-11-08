@@ -222,6 +222,35 @@ def test_download_start_requires_telegram_and_chat(client: TestClient):
     assert "Telegram" in response.json()["detail"]
 
 
+def test_download_status_uses_compact_live_payload(client: TestClient):
+    initialize_admin(client)
+    response = client.get(
+        "/api/downloads/status", headers={"Accept-Encoding": "gzip"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    payload = response.json()
+    assert "recent" not in payload
+    assert "completed_count" in payload["summary"]
+    assert "retry_wait_count" in payload["summary"]
+
+
+def test_retry_failed_download_action(client: TestClient, monkeypatch):
+    token = initialize_admin(client)
+    downloader = client.app.state.services.downloader
+
+    async def fake_retry_failed():
+        return {"state": "running", "requeued": 2, "active": [], "chats": []}
+
+    monkeypatch.setattr(downloader, "retry_failed", fake_retry_failed)
+    response = client.post(
+        "/api/downloads/retry_failed", headers={"X-CSRF-Token": token}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["requeued"] == 2
+
+
 def test_authenticated_incomplete_setup_can_open_monitor(client: TestClient):
     initialize_admin(client)
     response = client.get("/")
@@ -233,7 +262,13 @@ def test_authenticated_incomplete_setup_can_open_monitor(client: TestClient):
 
 def test_static_assets_and_authenticated_pages_render(client: TestClient):
     token = initialize_admin(client)
-    assert client.get("/static/app.css").status_code == 200
+    assert client.get(f"/static/favicon.svg?v={APP_VERSION}").status_code == 200
+    css_response = client.get(
+        f"/static/app.css?v={APP_VERSION}", headers={"Accept-Encoding": "gzip"}
+    )
+    assert css_response.status_code == 200
+    assert css_response.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert css_response.headers["content-encoding"] == "gzip"
     app_js_response = client.get("/static/app.js")
     assert app_js_response.status_code == 200
     app_js = app_js_response.text
@@ -278,8 +313,15 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     services = client.app.state.services
     monkeypatch.setattr(type(services.settings), "ready", property(lambda _: True))
 
-    dashboard = client.get("/")
+    dashboard = client.get("/", headers={"Accept-Encoding": "gzip"})
     assert dashboard.status_code == 200, dashboard.text
+    assert dashboard.headers["content-encoding"] == "gzip"
+    assert f"/static/favicon.svg?v={APP_VERSION}" in dashboard.text
+    assert f"/static/app.css?v={APP_VERSION}" in dashboard.text
+    assert f"/static/app.js?v={APP_VERSION}" in dashboard.text
+    assert "window.__TMD_BOOTSTRAP__" in dashboard.text
+    assert 'data-action="retry_failed"' in dashboard.text
+    assert "TMD.api('/api/downloads/status')" not in dashboard.text
     assert "当前总下载速度" in dashboard.text
     assert "存储资源" in dashboard.text
     assert 'id="stat-speed"' in dashboard.text
@@ -548,9 +590,11 @@ def test_media_preview_direct_download_and_history_api(
     assert response.headers["cache-control"] == "private, max-age=86400"
 
     response = client.get(
-        "/api/telegram/dialogs/-100123/messages/9/media"
+        "/api/telegram/dialogs/-100123/messages/9/media",
+        headers={"Accept-Encoding": "gzip"},
     )
     assert response.status_code == 200
+    assert "content-encoding" not in response.headers
     assert response.content == streaming_video
     assert response.headers["content-type"].startswith("video/mp4")
     assert response.headers["accept-ranges"] == "bytes"
@@ -587,6 +631,10 @@ def test_media_preview_direct_download_and_history_api(
     downloading_id = services.database.create_download(
         chat["id"], "Media Demo", 3, str(first_file), "video", 9
     )
+    retrying_id = services.database.create_download(
+        chat["id"], "Media Demo", 4, str(first_file), "video", 9
+    )
+    services.database.update_download(retrying_id, status="retry_wait")
     services.database.update_download(first_id, status="completed", downloaded_size=9)
     services.database.update_download(second_id, status="completed", downloaded_size=9)
 
@@ -597,9 +645,13 @@ def test_media_preview_direct_download_and_history_api(
     assert payload["pages"] == 2
     assert len(payload["items"]) == 1
     assert downloading_id not in [item["id"] for item in payload["items"]]
+    assert retrying_id not in [item["id"] for item in payload["items"]]
 
-    media = client.get(f"/api/downloads/{first_id}/media")
+    media = client.get(
+        f"/api/downloads/{first_id}/media", headers={"Accept-Encoding": "gzip"}
+    )
     assert media.status_code == 200
+    assert "content-encoding" not in media.headers
     assert media.content == b"video-one"
     assert media.headers["content-type"].startswith("video/mp4")
 
@@ -613,6 +665,8 @@ def test_download_record_retry_returns_existing_record(client: TestClient):
         chat["id"], "Retry Demo", 77, "/tmp/retry.mp4", "video", 1024
     )
     services.database.update_download(first_id, status="failed", error="network")
+    assert services.database.resumable_downloads(chat["id"]) == []
+    assert services.database.requeue_failed_downloads(10) == 1
     assert [
         item["id"]
         for item in services.database.resumable_downloads(chat["id"])

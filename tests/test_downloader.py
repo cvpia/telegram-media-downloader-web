@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.downloader import (
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     DOWNLOAD_CHUNK_SIZE,
     DownloaderService,
     build_destination,
@@ -100,7 +101,12 @@ def test_parse_proxy_url():
 def test_downloader_snapshot_reports_speed_progress_and_disk(tmp_path: Path):
     settings = SimpleNamespace(download_dir=lambda: tmp_path)
     database = SimpleNamespace(
-        recent_downloads=lambda limit: [],
+        download_counts=lambda: {
+            "completed": 3,
+            "failed": 4,
+            "retry_wait": 1,
+            "skipped": 2,
+        },
         list_chats=lambda: [
             {"id": 1, "enabled": True},
             {"id": 2, "enabled": False},
@@ -134,6 +140,10 @@ def test_downloader_snapshot_reports_speed_progress_and_disk(tmp_path: Path):
         "remaining": 5 * 1024 * 1024,
         "percent": 50.0,
         "eta_seconds": 5,
+        "completed_count": 3,
+        "failed_count": 4,
+        "retry_wait_count": 1,
+        "terminal_count": 9,
     }
     assert snapshot["active"][0]["percent"] == 50.0
     assert snapshot["active"][0]["speed"] == 1048576.0
@@ -395,7 +405,7 @@ async def test_download_chat_schedules_messages_concurrently(monkeypatch):
     )
 
     assert max_active == 3
-    assert last_messages == [(1, 1), (1, 2), (1, 3)]
+    assert last_messages == [(1, 3)]
 
 
 @pytest.mark.asyncio
@@ -445,7 +455,7 @@ async def test_download_chat_processes_new_messages_oldest_first(
     )
     await service._download_chat(chat)
 
-    assert last_messages == [(1, 11), (1, 12)]
+    assert last_messages == [(1, 12)]
 
 
 async def _async_value(value):
@@ -546,6 +556,7 @@ async def test_download_resumes_from_partial_chunk(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_download_keeps_partial_for_resume(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("app.downloader.DOWNLOAD_MAX_ATTEMPTS", 1)
     destination = tmp_path / "video.mp4"
     partial = partial_download_path(destination)
     updates = []
@@ -635,6 +646,7 @@ async def test_download_requests_one_telegram_chunk_at_a_time(
 async def test_stalled_telegram_chunk_stops_and_keeps_partial(
     tmp_path: Path, monkeypatch
 ):
+    monkeypatch.setattr("app.downloader.DOWNLOAD_MAX_ATTEMPTS", 1)
     destination = tmp_path / "video.mp4"
     updates = []
     monkeypatch.setattr("app.downloader.TELEGRAM_TRANSFER_STALL_TIMEOUT", 0.01)
@@ -752,3 +764,139 @@ async def test_start_bot_download_uses_bot_client(tmp_path: Path, monkeypatch):
     assert result["status"] == "queued"
     assert captured["client"] is bot_client
     assert captured["message"] is message
+
+@pytest.mark.asyncio
+async def test_download_retries_transient_empty_chunk_and_refreshes_message(
+    tmp_path: Path, monkeypatch
+):
+    payload = b"retry-success"
+    destination = tmp_path / "retry.mp4"
+    updates = []
+    monkeypatch.setattr("app.downloader.DOWNLOAD_RETRY_DELAYS", (0.0,))
+
+    media = SimpleNamespace(
+        file_id="stale-file", file_size=len(payload), file_name="retry.mp4"
+    )
+    message = SimpleNamespace(id=46, video=media)
+    fresh_message = SimpleNamespace(
+        id=46,
+        video=SimpleNamespace(
+            file_id="fresh-file", file_size=len(payload), file_name="retry.mp4"
+        ),
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.file_calls = 0
+            self.refresh_calls = 0
+
+        async def get_messages(self, chat_ref, message_ids):
+            self.refresh_calls += 1
+            assert chat_ref == "@retry"
+            assert message_ids == 46
+            return fresh_message
+
+        async def get_file(self, file_id, file_size, offset, limit=0):
+            self.file_calls += 1
+            if self.file_calls == 1:
+                return
+            assert offset == 0
+            yield payload
+
+    client = FakeClient()
+    database = SimpleNamespace(
+        create_download=lambda *args: 21,
+        update_download=lambda download_id, **kwargs: updates.append(
+            (download_id, kwargs)
+        ),
+    )
+    service = DownloaderService(database, SimpleNamespace(), SimpleNamespace())
+    monkeypatch.setattr("app.downloader.FileId.decode", lambda file_id: file_id)
+
+    success = await service._perform_download_message(
+        message=message,
+        media=media,
+        media_type="video",
+        file_name="retry.mp4",
+        chat_id=1,
+        chat_title="Retry",
+        destination_override=destination,
+        client_override=client,
+        chat_ref="@retry",
+    )
+
+    assert success is True
+    assert client.file_calls == 2
+    assert client.refresh_calls == 1
+    assert destination.read_bytes() == payload
+    assert any(update[1].get("status") == "retry_wait" for update in updates)
+    assert any(update[1].get("status") == "completed" for update in updates)
+
+
+def test_circuit_breaker_pauses_after_consecutive_terminal_failures():
+    service = DownloaderService(SimpleNamespace(), SimpleNamespace(), None)
+    service.state = "running"
+
+    for index in range(CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        service._record_terminal_failure(f"failure-{index}")
+
+    assert service.state == "paused"
+    assert "已自动暂停" in service.last_error
+    service._record_terminal_success()
+    assert service._consecutive_terminal_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_download_chat_stops_after_failed_batch(monkeypatch):
+    monkeypatch.setattr("app.downloader.DOWNLOAD_BATCH_SIZE", 2)
+    messages = [
+        SimpleNamespace(
+            id=message_id,
+            date=None,
+            video=SimpleNamespace(file_name=f"{message_id}.mp4", file_size=10),
+        )
+        for message_id in (6, 5, 4, 3, 2, 1)
+    ]
+
+    class FakeClient:
+        async def get_chat(self, chat_ref):
+            return SimpleNamespace(id=-100123, title="Batches")
+
+        async def get_chat_history(self, chat_id, **kwargs):
+            for message in messages:
+                yield message
+
+    last_messages = []
+    database = SimpleNamespace(
+        update_chat_metadata=lambda *args, **kwargs: None,
+        resumable_downloads=lambda chat_id: [],
+        set_last_message=lambda chat_id, message_id: last_messages.append(
+            (chat_id, message_id)
+        ),
+    )
+    settings = SimpleNamespace(media_types=lambda: ["video"], file_formats=lambda: {})
+    telegram = SimpleNamespace(get_client=lambda: _async_value(FakeClient()))
+    service = DownloaderService(database, settings, telegram)
+    service.state = "running"
+    attempted = []
+
+    async def fake_download(**kwargs):
+        attempted.append(kwargs["message"].id)
+        return False
+
+    monkeypatch.setattr(service, "_download_message", fake_download)
+    await service._download_chat(
+        {
+            "id": 1,
+            "chat_ref": "-100123",
+            "title": "Batches",
+            "last_message_id": 0,
+            "date_from": None,
+            "date_to": None,
+            "download_filter": "",
+        }
+    )
+
+    assert attempted
+    assert set(attempted).issubset({5, 6})
+    assert last_messages == []

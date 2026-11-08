@@ -9,9 +9,9 @@ from typing import AsyncIterator, Callable
 
 
 MAX_TRANSFER_CONCURRENCY = 10
-MIN_REQUEST_INTERVAL = 0.08
-SLOW_REQUEST_SECONDS = 2.5
-RECOVERY_REQUEST_COUNT = 12
+MIN_REQUEST_INTERVAL = 0.05
+SLOW_REQUEST_SECONDS = 5.0
+RECOVERY_REQUEST_COUNT = 8
 
 
 def _bounded_concurrency(value: int) -> int:

@@ -8,6 +8,7 @@
     <button class="button button-ghost" data-action="pause">暂停</button>
     <button class="button button-ghost" data-action="resume">继续</button>
     <button class="button button-danger" data-action="stop">停止</button>
+    <button class="button button-ghost" data-action="retry_failed">重试失败</button>
   </div>
 </section>
 
@@ -40,7 +41,7 @@
       <div><span>活动任务</span><strong id="stat-active">0</strong></div>
       <div><span>已下载流量</span><strong id="stat-downloaded">0 B</strong></div>
       <div><span>剩余时间</span><strong id="stat-eta">—</strong></div>
-      <div><span>最近完成</span><strong id="stat-completed">0</strong></div>
+      <div><span>已完成总数</span><strong id="stat-completed">0</strong></div>
     </div>
   </article>
 
@@ -112,8 +113,9 @@
 {% endblock %}
 {% block scripts %}
 <script>
+window.__TMD_BOOTSTRAP__ = {{ status|tojson }};
 const stateLabels = { stopped: '待机', running: '运行中', paused: '已暂停', completed: '已完成', error: '异常' };
-const historyLabels = { downloading: '下载中', completed: '已完成', failed: '失败', skipped: '已跳过' };
+const historyLabels = { downloading: '下载中', retry_wait: '等待重试', completed: '已完成', failed: '失败', skipped: '已跳过' };
 const mediaTypeLabels = { audio: '音频', document: '文档', photo: '图片', video: '视频', voice: '语音', video_note: '视频消息', animation: '动画' };
 const mediaIconPaths = {
   audio: '<path d="M9 18V6l10-2v12"></path><circle cx="6.5" cy="18" r="2.5"></circle><circle cx="16.5" cy="16" r="2.5"></circle>',
@@ -162,33 +164,81 @@ function progressPercent(item) {
   return Math.min(100, Math.round(item.downloaded_size / item.total_size * 100));
 }
 
-function renderActive(active) {
-  const list = document.getElementById('active-list');
-  document.getElementById('tab-active-count').textContent = active.length;
-  list.innerHTML = active.length ? active.map((item) => {
-    const percent = Math.min(100, Number(item.percent) || 0);
-    const waiting = item.status === 'waiting';
-    const statusText = waiting ? '等待 Telegram' : `下载中 ${percent.toFixed(0)}%`;
-    return `<article class="download-card">
-      <div class="download-card-head">
-        ${mediaTypeIconHtml(item.media_type)}
-        <div class="download-title"><strong>${TMD.escape(item.file_name)}</strong><small>${TMD.escape(item.chat)} · 消息 #${item.message_id}</small></div>
-        <span class="tag ${waiting ? 'tag-waiting' : 'tag-downloading'}">${statusText}</span>
-      </div>
-      <div class="download-progress"><span style="width:${percent}%"></span></div>
-      <div class="download-metrics">
-        <span><small>速度</small><strong>${formatSpeed(item.speed)}</strong></span>
-        <span><small>已下载</small><strong>${formatBytes(item.downloaded)} / ${formatBytes(item.total)}</strong></span>
-        <span><small>剩余时间</small><strong>${formatDuration(item.eta_seconds)}</strong></span>
-        <span><small>进度</small><strong>${percent.toFixed(1)}%</strong></span>
-      </div>
-    </article>`;
-  }).join('') : '<p class="empty-state">暂无正在进行的任务</p>';
+function setText(element, value) {
+  if (!element) return;
+  const text = String(value ?? '');
+  if (element.textContent !== text) element.textContent = text;
 }
 
+function statusCopy(item, percent) {
+  if (item.status === 'retrying') {
+    return { className: 'tag-waiting', text: `等待重试 ${formatDuration(item.retry_seconds)}` };
+  }
+  if (item.status === 'waiting') return { className: 'tag-waiting', text: '等待 Telegram' };
+  return { className: 'tag-downloading', text: `下载中 ${percent.toFixed(0)}%` };
+}
+
+function activeCardHtml(item) {
+  const percent = Math.min(100, Number(item.percent) || 0);
+  const status = statusCopy(item, percent);
+  return `<article class="download-card ${item.status === 'retrying' ? 'is-retrying' : ''}" data-record-id="${item.record_id}" title="${TMD.escape(item.error || '')}">
+    <div class="download-card-head">
+      ${mediaTypeIconHtml(item.media_type)}
+      <div class="download-title"><strong>${TMD.escape(item.file_name)}</strong><small>${TMD.escape(item.chat)} · 消息 #${item.message_id} · 第 ${item.attempt || 1}/${item.max_attempts || 1} 次</small></div>
+      <span class="tag ${status.className}" data-field="status">${status.text}</span>
+    </div>
+    <div class="download-progress"><span data-field="progress" style="width:${percent}%"></span></div>
+    <div class="download-metrics">
+      <span><small>速度</small><strong data-field="speed">${formatSpeed(item.speed)}</strong></span>
+      <span><small>已下载</small><strong data-field="bytes">${formatBytes(item.downloaded)} / ${formatBytes(item.total)}</strong></span>
+      <span><small>剩余时间</small><strong data-field="eta">${formatDuration(item.eta_seconds)}</strong></span>
+      <span><small>进度</small><strong data-field="percent">${percent.toFixed(1)}%</strong></span>
+    </div>
+  </article>`;
+}
+
+function updateActiveCard(card, item) {
+  const percent = Math.min(100, Number(item.percent) || 0);
+  const status = statusCopy(item, percent);
+  card.classList.toggle('is-retrying', item.status === 'retrying');
+  const badge = card.querySelector('[data-field="status"]');
+  if (badge) {
+    badge.className = `tag ${status.className}`;
+    setText(badge, status.text);
+  }
+  const progress = card.querySelector('[data-field="progress"]');
+  if (progress) progress.style.width = `${percent}%`;
+  setText(card.querySelector('[data-field="speed"]'), formatSpeed(item.speed));
+  setText(card.querySelector('[data-field="bytes"]'), `${formatBytes(item.downloaded)} / ${formatBytes(item.total)}`);
+  setText(card.querySelector('[data-field="eta"]'), formatDuration(item.eta_seconds));
+  setText(card.querySelector('[data-field="percent"]'), `${percent.toFixed(1)}%`);
+  const title = TMD.escape(item.error || '');
+  if (card.title !== title) card.title = title;
+}
+
+let activeListSignature = '';
+function renderActive(active) {
+  const list = document.getElementById('active-list');
+  setText(document.getElementById('tab-active-count'), active.length);
+  const signature = active.map((item) => item.record_id).join('|');
+  if (signature !== activeListSignature) {
+    activeListSignature = signature;
+    list.innerHTML = active.length ? active.map(activeCardHtml).join('') : '<p class="empty-state">暂无正在进行的任务</p>';
+    return;
+  }
+  active.forEach((item) => {
+    const card = list.querySelector(`[data-record-id="${item.record_id}"]`);
+    if (card) updateActiveCard(card, item);
+  });
+}
+
+let sourceListSignature = '';
 function renderSources(chats) {
   const list = document.getElementById('source-list');
-  if (!chats || !chats.length) {
+  const signature = chats.map((chat) => `${chat.id}:${chat.title}:${chat.enabled}:${chat.last_message_id}`).join('|');
+  if (signature === sourceListSignature) return;
+  sourceListSignature = signature;
+  if (!chats.length) {
     list.innerHTML = '<p class="empty-state">尚未添加频道</p>';
     return;
   }
@@ -278,10 +328,13 @@ function renderHistory(data) {
     } else if (canOpen && isVideo) {
       mediaPreview = `<button class="history-thumbnail history-video-thumbnail" type="button" data-play-media data-media-url="${mediaUrl}" data-media-title="${TMD.escape(fileName)}" aria-label="播放视频：${TMD.escape(fileName)}"><video data-lazy-video-thumbnail data-thumbnail-src="${TMD.escape(`${mediaUrl}#t=0.1`)}" preload="none" muted playsinline aria-hidden="true"></video><span class="history-play-badge" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 7.5v9l7-4.5-7-4.5Z"></path></svg></span>${mediaTypeIconHtml(item.media_type, 'history-type-badge')}</button>`;
     }
+    const errorHint = item.status === 'failed' && item.error
+      ? `<small class="history-error" title="${TMD.escape(item.error)}">${TMD.escape(item.error)}</small>`
+      : '';
     return `<tr>
       <td><span class="tag tag-${TMD.escape(item.status)}">${TMD.escape(historyLabels[item.status] || item.status)}</span></td>
       <td>${TMD.escape(item.chat_title)}</td>
-      <td class="file-cell" title="${TMD.escape(item.file_name)}">${TMD.escape(fileName)}</td>
+      <td class="file-cell" title="${TMD.escape(item.file_name)}"><span class="history-file-name">${TMD.escape(fileName)}</span>${errorHint}</td>
       <td><div class="history-media-cell">${mediaPreview}</div></td>
       <td><div class="inline-progress"><span style="width:${progressPercent(item)}%"></span></div><small>${formatBytes(item.downloaded_size)} / ${formatBytes(item.total_size)}</small></td>
       <td>${TMD.escape(item.started_at)}</td>
@@ -361,7 +414,7 @@ function renderStatus(data) {
   document.getElementById('stat-downloaded').textContent = formatBytes(summary.total_downloaded);
   document.getElementById('stat-eta').textContent = formatDuration(summary.eta_seconds);
   document.getElementById('stat-chats').textContent = summary.enabled_count ?? chats.filter((chat) => chat.enabled).length;
-  document.getElementById('stat-completed').textContent = (data.recent || []).filter((item) => item.status === 'completed').length;
+  document.getElementById('stat-completed').textContent = summary.completed_count ?? 0;
   document.getElementById('stat-overall').textContent = `${percent.toFixed(0)}%`;
   document.getElementById('overall-ring').style.setProperty('--value', percent);
   document.getElementById('overall-progress-bar').style.width = `${percent}%`;
@@ -393,9 +446,15 @@ document.querySelectorAll('[data-action]').forEach((button) => {
   button.addEventListener('click', async () => {
     button.disabled = true;
     try {
-      const result = await TMD.api(`/api/downloads/${button.dataset.action}`, { method: 'POST' });
+      const action = button.dataset.action;
+      const result = await TMD.api(`/api/downloads/${action}`, { method: 'POST' });
       renderStatus(result);
-      TMD.toast('下载状态已更新', 'success');
+      if (action === 'retry_failed') {
+        const count = Number(result.requeued || 0);
+        TMD.toast(count ? `已重新排队 ${count} 个失败任务` : '没有可重试的失败任务', count ? 'success' : 'info');
+      } else {
+        TMD.toast('下载状态已更新', 'success');
+      }
     } catch (err) { TMD.toast(err.message, 'error'); }
     finally { button.disabled = false; }
   });
@@ -403,19 +462,30 @@ document.querySelectorAll('[data-action]').forEach((button) => {
 
 let source = null;
 let reconnectTimer = null;
+let reconnectDelay = 3000;
 function connectEvents() {
   if (source) source.close();
   clearTimeout(reconnectTimer);
   source = new EventSource('/api/events');
+  source.onopen = () => { reconnectDelay = 3000; };
   source.onmessage = (event) => {
     try { renderStatus(JSON.parse(event.data)); } catch (_) {}
   };
   source.onerror = () => {
     source.close();
-    reconnectTimer = setTimeout(connectEvents, 3000);
+    reconnectTimer = setTimeout(connectEvents, reconnectDelay);
+    reconnectDelay = Math.min(Math.round(reconnectDelay * 1.6), 15000);
   };
 }
-TMD.api('/api/downloads/status').then(renderStatus).catch((err) => TMD.toast(err.message, 'error'));
-connectEvents();
+function bootDashboard() {
+  if (window.__TMD_BOOTSTRAP__) renderStatus(window.__TMD_BOOTSTRAP__);
+  connectEvents();
+}
+if (document.readyState === 'complete') bootDashboard();
+else window.addEventListener('load', bootDashboard, { once: true });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && source && source.readyState === EventSource.CLOSED) connectEvents();
+});
 </script>
+
 {% endblock %}

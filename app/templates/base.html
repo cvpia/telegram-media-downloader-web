@@ -5,8 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f5f5f7">
+  <meta name="description" content="Telegram 媒体下载、频道筛选与消息转发的一体化管理台">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" href="/static/favicon.svg?v={{ app_version }}" type="image/svg+xml">
+  <link rel="preload" href="/static/app.css?v={{ app_version }}" as="style">
+  <link rel="stylesheet" href="/static/app.css?v={{ app_version }}">
 </head>
 <body class="page-{{ page }}" data-authenticated="{{ 'true' if authenticated else 'false' }}">
   {% if authenticated %}
@@ -31,7 +35,7 @@
   </header>
   {% endif %}
 
-  <main class="page-shell">
+  <main class="page-shell" id="main-content">
     {% block content %}{% endblock %}
   </main>
 
@@ -54,7 +58,7 @@
   {% endif %}
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ app_version }}" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
