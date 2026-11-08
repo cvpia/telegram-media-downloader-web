@@ -35,7 +35,7 @@
 
   <article class="panel">
     <div class="panel-heading"><div><h2>下载设置</h2><p class="muted">媒体类型、目录模板和并发数</p></div></div>
-    <label><span>保存目录</span><input id="download-dir" type="text" required></label>
+    <label><span>保存目录（固定）</span><input id="download-dir" type="text" required readonly><small>Windows 与 Linux 均使用项目根目录下的 downloads；Docker 内对应 /downloads，并映射到宿主机 ./downloads。</small></label>
     <fieldset><legend>媒体类型</legend><div class="check-grid" id="media-type-grid"></div></fieldset>
     <fieldset><legend>目录结构</legend><div class="check-grid" id="folder-part-grid"></div></fieldset>
     <div class="form-grid">
@@ -96,7 +96,6 @@ document.getElementById('settings-form').addEventListener('submit', async (event
   error.hidden = true;
   try {
     const body = {
-      download_dir: document.getElementById('download-dir').value,
       media_types: checkedValues('#media-type-grid'),
       folder_parts: checkedValues('#folder-part-grid'),
       filename_template: document.getElementById('filename-template').value,

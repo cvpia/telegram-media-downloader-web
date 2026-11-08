@@ -1,6 +1,6 @@
 services:
   telegram-media-downloader:
-    image: xxoo520zls/telegram-media-downloader-web:3.8.0
+    image: xxoo520zls/telegram-media-downloader-web:3.9.0
     build:
       context: .
       target: runtime
@@ -10,6 +10,7 @@ services:
     environment:
       TMD_DATA_DIR: /data
       TMD_DOWNLOAD_DIR: /downloads
+      TMD_REQUIRE_PERSISTENT_STORAGE: "1"
     volumes:
       - ./data:/data
       - ./downloads:/downloads

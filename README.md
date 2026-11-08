@@ -2,7 +2,7 @@
 
 基于 FastAPI 重写的 Telegram 媒体下载器。目标是把原项目需要手工编辑 YAML、进入终端完成首次登录的流程，改成浏览器内一次完成。
 
-当前版本：**3.8.0**
+当前版本：**3.9.0**
 
 ## 功能
 
@@ -16,6 +16,7 @@
 - Web 端新增消息转发管理，可配置源会话、目标会话、筛选条件和监听状态
 - 登录会话保存在服务器本地
 - 频道管理使用本地缓存优先展示，随后在后台同步账号会话和群头像
+- 频道与会话缓存持久化到服务端 SQLite，重新进入页面立即显示，后台仅在数据变化时刷新列表
 - 点击频道或群组优先显示本地缓存，并复用 Telegram 会话 Peer 快速加载最近消息
 - 上滑到顶部自动连续加载更早的 50 条消息，并保持当前阅读位置
 - 频道消息使用轻量缩略图预览，点击视频图会在页面内流式在线播放，点击图片可查看原图，并可直接保存到 downloads/频道名称
@@ -82,7 +83,7 @@ message_date >= 2025.01.01 and media_type == r'(video|audio)'
 Docker Hub 镜像：
 
 ```bash
-docker pull xxoo520zls/telegram-media-downloader-web:3.8.0
+docker pull xxoo520zls/telegram-media-downloader-web:3.9.0
 ```
 
 也可以直接使用 Compose 构建并启动（配置中的 `image` 会同步标记本地构建结果）：
@@ -101,10 +102,21 @@ http://localhost:8000
 
 数据目录：
 
-- `./data`：SQLite、加密密钥、Telegram 会话和日志
-- `./downloads`：默认下载目录
+- `./data`：SQLite、加密密钥、Telegram 会话和日志；更新或重建容器时必须保留
+- `./downloads`：固定下载目录；Windows 与 Linux 原生运行时均使用项目根目录下的 `downloads`，Docker 内对应 `/downloads`
 
-备份时至少需要保留 `./data`。
+更新前建议备份 `./data`。应用每次启动会把已有数据库备份到 `./data/app.db.previous`，但该备份本身也必须位于持久化目录中。
+
+需要恢复数据库时，先停止服务并同时处理 `app.db`、`app.db-wal` 和 `app.db-shm`，再使用 `app.db.previous` 替换主数据库；不要在服务运行中直接覆盖数据库文件。
+
+更新容器时使用：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+不要执行会删除数据卷的 `docker compose down -v`，也不要删除容器后使用未挂载 `./data:/data` 的 `docker run` 命令重建。Compose 配置已启用启动检查：容器内未挂载 `/data` 或 `/downloads` 时会直接拒绝启动，避免在临时容器层里写入配置后丢失。
 
 仅拉取镜像运行：
 
@@ -114,10 +126,11 @@ docker run -d \
   -p 8000:8000 \
   -e TMD_DATA_DIR=/data \
   -e TMD_DOWNLOAD_DIR=/downloads \
+  -e TMD_REQUIRE_PERSISTENT_STORAGE=1 \
   -v "$PWD/data:/data" \
   -v "$PWD/downloads:/downloads" \
   --restart unless-stopped \
-  xxoo520zls/telegram-media-downloader-web:3.8.0
+  xxoo520zls/telegram-media-downloader-web:3.9.0
 ```
 
 ## 本地开发

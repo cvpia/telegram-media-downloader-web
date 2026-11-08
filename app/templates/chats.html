@@ -159,10 +159,10 @@
 {% block scripts %}
 <script>
 const initialChats = {{ chats | tojson }};
+const initialDialogCache = {{ dialog_cache | tojson }};
 const telegramConnected = {{ 'true' if telegram_connected else 'false' }};
-const DIALOG_CACHE_KEY = 'tmd:dialogs:v2';
 const MESSAGE_CACHE_LIMIT = 12;
-let allDialogs = [];
+let allDialogs = Array.isArray(initialDialogCache.dialogs) ? initialDialogCache.dialogs : [];
 let currentChats = initialChats;
 let configuredRefs = new Set();
 let activeDialogId = null;
@@ -178,24 +178,6 @@ let olderLoadScheduled = false;
 let messageObserver = null;
 let syncInProgress = false;
 const messageCache = new Map();
-
-function readDialogCache() {
-  try {
-    const cached = JSON.parse(localStorage.getItem(DIALOG_CACHE_KEY) || 'null');
-    const dialogs = Array.isArray(cached?.dialogs)
-      ? cached.dialogs.filter((dialog) => dialog && dialog.id && dialog.title)
-      : [];
-    return { dialogs, cachedAt: Number(cached?.cachedAt || 0) };
-  } catch (_) {
-    return { dialogs: [], cachedAt: 0 };
-  }
-}
-
-function writeDialogCache(dialogs) {
-  try {
-    localStorage.setItem(DIALOG_CACHE_KEY, JSON.stringify({ cachedAt: Date.now(), dialogs }));
-  } catch (_) {}
-}
 
 function formatCacheTime(timestamp) {
   if (!timestamp) return '本地缓存';
@@ -685,10 +667,12 @@ async function loadDialogs({ silent = false } = {}) {
   try {
     const dialogs = await TMD.api('/api/telegram/dialogs');
     if (!Array.isArray(dialogs)) throw new Error('账号会话数据格式异常');
+    const changed = JSON.stringify(dialogs) !== JSON.stringify(allDialogs);
     allDialogs = dialogs;
-    writeDialogCache(allDialogs);
-    updateDialogOptions();
-    renderDialogs();
+    if (changed) {
+      updateDialogOptions();
+      renderDialogs();
+    }
     setSyncState(`已更新 · ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`, 'ready');
     if (!silent) TMD.toast(`账号会话已更新，共 ${allDialogs.length} 个`, 'success');
   } catch (err) {
@@ -862,12 +846,9 @@ document.getElementById('rule-form').addEventListener('submit', async (event) =>
 });
 
 renderChats(initialChats);
-const dialogCache = readDialogCache();
-if (dialogCache.dialogs.length) {
-  allDialogs = dialogCache.dialogs;
+if (allDialogs.length) {
   updateDialogOptions();
-  renderDialogs();
-  setSyncState(formatCacheTime(dialogCache.cachedAt), 'cache');
+  setSyncState(formatCacheTime(initialDialogCache.cached_at), 'cache');
 }
 if (telegramConnected) {
   loadDialogs({ silent: true });

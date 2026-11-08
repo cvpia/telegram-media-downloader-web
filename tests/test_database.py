@@ -72,3 +72,34 @@ def test_initialize_migrates_download_retry_columns(tmp_path: Path):
     assert retried["status"] == "retry_wait"
     assert retried["error"] is None
     assert retried["finished_at"] is None
+
+
+def test_dialog_cache_round_trip(tmp_path: Path):
+    database = Database(tmp_path / "app.db")
+    database.initialize()
+
+    saved = database.save_dialog_cache(
+        [
+            {"id": "1", "title": "Cached", "type": "channel"},
+            {"id": "", "title": "Invalid", "type": "channel"},
+        ]
+    )
+
+    assert saved["cached_at"] > 0
+    assert database.get_dialog_cache()["dialogs"] == [
+        {"id": "1", "title": "Cached", "type": "channel"}
+    ]
+
+
+def test_database_backup_preserves_settings_and_channels(tmp_path: Path):
+    database = Database(tmp_path / "app.db")
+    database.initialize()
+    database.set_setting("admin_password_hash", "hash")
+    database.upsert_chat("@persisted", "Persisted Channel")
+    backup_path = tmp_path / "app.db.previous"
+
+    database.backup_to(backup_path)
+
+    backup = Database(backup_path)
+    assert backup.get_setting("admin_password_hash") == "hash"
+    assert [chat["chat_ref"] for chat in backup.list_chats()] == ["@persisted"]

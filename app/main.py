@@ -166,6 +166,7 @@ def page_context(request: Request, **extra: Any) -> dict[str, Any]:
 def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
     runtime = runtime or RuntimeConfig.from_env()
     runtime.ensure_directories()
+    runtime.validate_persistent_storage()
     cipher = SecretCipher.load_or_create(runtime.secret_key_path)
 
     @asynccontextmanager
@@ -175,6 +176,11 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         )
         database = Database(runtime.database_path)
+        if runtime.database_path.exists():
+            try:
+                database.backup_to(runtime.data_dir / "app.db.previous")
+            except Exception:
+                logger.exception("Failed to back up SQLite database before startup")
         database.initialize()
         settings = SettingsService(database, cipher, runtime.download_dir)
         telegram = TelegramManager(settings, runtime.session_dir)
@@ -344,7 +350,10 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         request: Request,
     ) -> dict[str, Any]:
         services = service_container(request)
-        result = services.settings.update(payload)
+        try:
+            result = services.settings.update(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         await services.downloader.refresh_concurrency_limit()
         await services.bot.restart()
         return result
@@ -441,9 +450,19 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
     @app.get("/api/telegram/dialogs", dependencies=[Depends(require_admin)])
     async def telegram_dialogs(request: Request) -> list[dict[str, Any]]:
         try:
-            return await service_container(request).telegram.list_dialogs()
+            services = service_container(request)
+            dialogs = await services.telegram.list_dialogs()
+            services.database.save_dialog_cache(dialogs)
+            return dialogs
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get(
+        "/api/telegram/dialogs/cache",
+        dependencies=[Depends(require_admin)],
+    )
+    async def telegram_dialogs_cache(request: Request) -> dict[str, Any]:
+        return service_container(request).database.get_dialog_cache()
 
     @app.get(
         "/api/telegram/dialogs/{dialog_id}/avatar",
@@ -920,6 +939,7 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
                 request,
                 page="chats",
                 chats=services.database.list_chats(),
+                dialog_cache=services.database.get_dialog_cache(),
                 telegram_connected=services.settings.telegram_connected,
             ),
         )

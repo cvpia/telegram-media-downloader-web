@@ -34,6 +34,7 @@ def test_setup_page_renders_version_and_csrf(client: TestClient):
     assert 'id="api-hash"' in response.text
     assert 'id="bot-token"' in response.text
     assert 'test-saved-network' in response.text
+    assert 'id="download-dir" type="text" required readonly' in response.text
 
 
 def test_csrf_is_required(client: TestClient):
@@ -74,9 +75,8 @@ def test_admin_setup_login_and_logout(client: TestClient):
     assert client.get("/api/settings").status_code == 200
 
 
-def test_settings_update_encrypts_secrets(client: TestClient, tmp_path, monkeypatch):
+def test_settings_update_encrypts_secrets(client: TestClient, monkeypatch):
     token = initialize_admin(client)
-    download_dir = tmp_path / "custom-downloads"
     refresh_calls = 0
 
     async def fake_refresh_concurrency_limit():
@@ -94,7 +94,6 @@ def test_settings_update_encrypts_secrets(client: TestClient, tmp_path, monkeypa
             "api_id": 123456,
             "api_hash": "super-secret-hash",
             "bot_token": "123456:super-secret-bot-token",
-            "download_dir": str(download_dir),
             "media_types": ["photo", "video"],
             "folder_parts": ["chat_title", "date", "media_type"],
             "filename_template": "{date}_{message_id}",
@@ -111,7 +110,10 @@ def test_settings_update_encrypts_secrets(client: TestClient, tmp_path, monkeypa
     assert "super-secret-bot-token" not in response.text
     assert payload["bot_token_configured"] is True
     assert payload["media_types"] == ["photo", "video"]
-    assert download_dir.exists()
+    assert payload["download_dir"] == str(
+        client.app.state.runtime.download_dir.resolve()
+    )
+    assert client.app.state.runtime.download_dir.exists()
     assert refresh_calls == 1
 
     raw_api_hash = client.app.state.services.database.get_setting("api_hash")
@@ -131,6 +133,25 @@ def test_settings_validation_rejects_unknown_values(client: TestClient):
         headers={"X-CSRF-Token": token},
     )
     assert response.status_code == 422
+
+
+def test_settings_download_directory_is_fixed(client: TestClient, tmp_path):
+    token = initialize_admin(client)
+    custom_dir = tmp_path / "custom-downloads"
+    fixed_dir = client.app.state.runtime.download_dir.resolve()
+
+    response = client.put(
+        "/api/settings",
+        json={"download_dir": str(custom_dir)},
+        headers={"X-CSRF-Token": token},
+    )
+    assert response.status_code == 422
+    assert "固定" in response.json()["detail"]
+    assert not custom_dir.exists()
+
+    client.app.state.services.database.set_setting("download_dir", str(custom_dir))
+    assert client.app.state.services.settings.download_dir() == fixed_dir
+    assert client.get("/api/settings").json()["download_dir"] == str(fixed_dir)
 
 
 def test_chat_crud(client: TestClient):
@@ -205,7 +226,11 @@ chat:
 
     chats = client.get("/api/chats").json()
     assert chats[0]["last_message_id"] == 25
-    assert client.get("/api/settings").json()["media_types"] == ["photo", "video"]
+    settings = client.get("/api/settings").json()
+    assert settings["media_types"] == ["photo", "video"]
+    assert settings["download_dir"] == str(
+        client.app.state.runtime.download_dir.resolve()
+    )
 
     exported = client.get("/api/settings/export.yaml")
     assert exported.status_code == 200
@@ -275,6 +300,8 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     settings_page = client.get("/settings")
     assert settings_page.status_code == 200
     assert "系统设置" in settings_page.text
+    assert 'id="download-dir" type="text" required readonly' in settings_page.text
+    assert "download_dir: document.getElementById('download-dir').value" not in settings_page.text
     chats_page = client.get("/chats")
     assert chats_page.status_code == 200
     assert "频道管理" in chats_page.text
@@ -300,13 +327,54 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert "openVideo" in app_js
     assert "openImage" in app_js
     assert 'id="sync-state"' in chats_page.text
-    assert "tmd:dialogs:v2" in chats_page.text
-    assert "localStorage" in chats_page.text
+    assert "initialDialogCache" in chats_page.text
+    assert "localStorage" not in chats_page.text
     assert 'href="/forwarding"' in chats_page.text
     assert "下载监控" in settings_page.text
     assert "配置向导" in settings_page.text
     assert 'href="/setup?edit=1"' in settings_page.text
     assert token
+
+
+def test_dialog_cache_is_server_rendered_and_lazy_synced(
+    client: TestClient, monkeypatch
+):
+    initialize_admin(client)
+    services = client.app.state.services
+    cached_dialogs = [
+        {
+            "id": "123",
+            "title": "Cache Channel",
+            "username": "cache_channel",
+            "type": "channel",
+        }
+    ]
+    services.database.save_dialog_cache(cached_dialogs)
+
+    page = client.get("/chats")
+    assert page.status_code == 200
+    assert "initialDialogCache" in page.text
+    assert "Cache Channel" in page.text
+    assert services.database.get_dialog_cache()["dialogs"] == cached_dialogs
+
+    async def fake_list_dialogs():
+        return [
+            *cached_dialogs,
+            {
+                "id": "456",
+                "title": "Fresh Channel",
+                "username": "fresh_channel",
+                "type": "channel",
+            },
+        ]
+
+    monkeypatch.setattr(services.telegram, "list_dialogs", fake_list_dialogs)
+    response = client.get("/api/telegram/dialogs")
+    assert response.status_code == 200, response.text
+    assert [dialog["id"] for dialog in response.json()] == ["123", "456"]
+    refreshed_cache = client.get("/api/telegram/dialogs/cache").json()
+    assert [dialog["id"] for dialog in refreshed_cache["dialogs"]] == ["123", "456"]
+    assert refreshed_cache["cached_at"] > 0
 
 def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypatch):
     initialize_admin(client)
@@ -319,6 +387,8 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert f"/static/favicon.svg?v={APP_VERSION}" in dashboard.text
     assert f"/static/app.css?v={APP_VERSION}" in dashboard.text
     assert f"/static/app.js?v={APP_VERSION}" in dashboard.text
+    assert f'<script src="/static/app.js?v={APP_VERSION}"></script>' in dashboard.text
+    assert f'<script src="/static/app.js?v={APP_VERSION}" defer></script>' not in dashboard.text
     assert "window.__TMD_BOOTSTRAP__" in dashboard.text
     assert 'data-action="retry_failed"' in dashboard.text
     assert "TMD.api('/api/downloads/status')" not in dashboard.text

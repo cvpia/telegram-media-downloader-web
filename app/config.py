@@ -10,6 +10,15 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def resolve_download_dir(value: str | Path | None = None) -> Path:
+    """Resolve the fixed download directory for native and container runtimes."""
+
+    configured = value if value is not None else os.getenv("TMD_DOWNLOAD_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (PROJECT_ROOT / "downloads").resolve()
+
+
 @dataclass(slots=True)
 class RuntimeConfig:
     """Filesystem locations and test/runtime switches."""
@@ -23,9 +32,7 @@ class RuntimeConfig:
     @classmethod
     def from_env(cls) -> "RuntimeConfig":
         data_dir = Path(os.getenv("TMD_DATA_DIR", PROJECT_ROOT / "data")).resolve()
-        download_dir = Path(
-            os.getenv("TMD_DOWNLOAD_DIR", PROJECT_ROOT / "downloads")
-        ).resolve()
+        download_dir = resolve_download_dir()
         return cls(
             data_dir=data_dir,
             download_dir=download_dir,
@@ -54,3 +61,17 @@ class RuntimeConfig:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.session_dir.mkdir(parents=True, exist_ok=True)
+
+    def validate_persistent_storage(self) -> None:
+        if os.getenv("TMD_REQUIRE_PERSISTENT_STORAGE", "0") != "1":
+            return
+        missing = [
+            str(path)
+            for path in (self.data_dir, self.download_dir)
+            if not os.path.ismount(path)
+        ]
+        if missing:
+            joined = "、".join(missing)
+            raise RuntimeError(
+                f"Docker 必须持久化挂载 data 和 downloads，当前未挂载: {joined}"
+            )

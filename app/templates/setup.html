@@ -78,9 +78,9 @@
     </section>
 
     <section class="wizard-step" data-step="5">
-      <div class="step-heading"><span class="step-number">05</span><div><h2>下载偏好</h2><p>这些设置以后都可以在“系统设置”中修改。保存后前往频道管理添加下载来源。</p></div></div>
+      <div class="step-heading"><span class="step-number">05</span><div><h2>下载偏好</h2><p>保存目录固定为项目根目录下的 downloads；其余设置以后都可以在“系统设置”中修改。</p></div></div>
       <form id="preferences-form" class="stack-form">
-        <label><span>保存目录</span><input id="download-dir" type="text" required></label>
+        <label><span>保存目录（固定）</span><input id="download-dir" type="text" required readonly><small>Windows 与 Linux 均使用项目根目录下的 downloads；Docker 内对应 /downloads，并映射到宿主机 ./downloads。</small></label>
         <fieldset><legend>媒体类型</legend><div class="check-grid" id="media-type-grid"></div></fieldset>
         <fieldset><legend>目录结构</legend><div class="check-grid" id="folder-part-grid"></div></fieldset>
         <div class="form-grid">
@@ -359,7 +359,6 @@ document.getElementById('preferences-form').addEventListener('submit', async (ev
   setError(form, '');
   try {
     await TMD.api('/api/settings', { method: 'PUT', body: {
-      download_dir: document.getElementById('download-dir').value,
       media_types: checkedValues('#media-type-grid'),
       folder_parts: checkedValues('#folder-part-grid'),
       filename_template: document.getElementById('filename-template').value,

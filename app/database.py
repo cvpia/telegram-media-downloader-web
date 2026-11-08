@@ -15,6 +15,7 @@ def utc_now() -> str:
 
 
 _UNSET = object()
+DIALOG_CACHE_KEY = "telegram_dialog_cache"
 
 
 class Database:
@@ -34,6 +35,11 @@ class Database:
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA synchronous=NORMAL")
         return connection
+
+    def backup_to(self, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock, self._connect() as source, sqlite3.connect(destination) as target:
+            source.backup(target)
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -166,6 +172,32 @@ class Database:
                 """,
                 rows,
             )
+
+    def get_dialog_cache(self) -> dict[str, Any]:
+        cached = self.get_setting(DIALOG_CACHE_KEY, {})
+        if not isinstance(cached, dict):
+            return {"dialogs": [], "cached_at": 0}
+        dialogs = cached.get("dialogs", [])
+        if not isinstance(dialogs, list):
+            dialogs = []
+        cleaned = [
+            dialog
+            for dialog in dialogs
+            if isinstance(dialog, dict) and dialog.get("id") and dialog.get("title")
+        ]
+        try:
+            cached_at = int(cached.get("cached_at", 0) or 0)
+        except (TypeError, ValueError):
+            cached_at = 0
+        return {"dialogs": cleaned, "cached_at": cached_at}
+
+    def save_dialog_cache(self, dialogs: list[dict[str, Any]]) -> dict[str, Any]:
+        payload = {
+            "dialogs": dialogs,
+            "cached_at": int(datetime.now(UTC).timestamp() * 1000),
+        }
+        self.set_setting(DIALOG_CACHE_KEY, payload)
+        return payload
 
     def list_chats(self) -> list[dict[str, Any]]:
         with self._lock, self._connect() as connection:

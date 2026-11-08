@@ -134,7 +134,6 @@
     logout.addEventListener('click', async () => {
       try {
         await api('/api/auth/logout', { method: 'POST' });
-        localStorage.removeItem('tmd:dialogs:v2');
       } finally {
         window.location.href = '/login';
       }

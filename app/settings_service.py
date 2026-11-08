@@ -94,8 +94,7 @@ class SettingsService:
         self.database.set_setting("telegram_logged_in", connected)
 
     def download_dir(self) -> Path:
-        raw = self._get("download_dir")
-        return Path(raw).expanduser().resolve() if raw else self.default_download_dir
+        return self.default_download_dir.expanduser().resolve()
 
     def folder_parts(self) -> list[str]:
         return list(self._get("folder_parts", DEFAULT_FOLDER_PARTS))
@@ -139,9 +138,9 @@ class SettingsService:
         if "bot_token" in values:
             self._set("bot_token", str(values["bot_token"] or "").strip())
         if "download_dir" in values and values["download_dir"] is not None:
-            download_dir = Path(values["download_dir"]).expanduser().resolve()
-            download_dir.mkdir(parents=True, exist_ok=True)
-            self._set("download_dir", str(download_dir))
+            requested_dir = Path(values["download_dir"]).expanduser().resolve()
+            if requested_dir != self.download_dir():
+                raise ValueError(f"保存目录已固定为 {self.download_dir()}")
         if "media_types" in values and values["media_types"] is not None:
             self._set("media_types", list(values["media_types"]))
         if "file_formats" in values and values["file_formats"] is not None:
@@ -206,8 +205,6 @@ class SettingsService:
             update_data["media_types"] = list(data["media_types"])
         if data.get("file_formats"):
             update_data["file_formats"] = data["file_formats"]
-        if data.get("save_path"):
-            update_data["download_dir"] = str(data["save_path"])
         if data.get("file_path_prefix"):
             update_data["folder_parts"] = list(data["file_path_prefix"])
         if isinstance(data.get("file_name_prefix"), str):
