@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import shlex
+from collections import deque
 from types import SimpleNamespace
 from typing import Any
 
@@ -23,6 +24,7 @@ from app.version import APP_NAME, APP_VERSION
 
 logger = logging.getLogger(__name__)
 NUMERIC_CHAT_RE = re.compile(r"^-?\d+$")
+FORWARD_BATCH_SIZE = 500
 BOT_COMMANDS = [
     BotCommand("start", "查看机器人说明"),
     BotCommand("help", "查看命令帮助"),
@@ -228,7 +230,7 @@ class BotService:
             "/download <源会话> <开始ID> <结束ID> [筛选表达式]\n\n"
             "立即转发消息范围：\n"
             "/forward <源会话> <目标会话> <开始ID> <结束ID> [筛选表达式]\n\n"
-            "监听并自动转发新消息：\n"
+            "监听并自动转发历史及新消息：\n"
             "/listen_forward <源会话> <目标会话> [筛选表达式]\n\n"
             "停用监听规则：\n"
             "/stop_listen <规则ID|all>\n\n"
@@ -252,6 +254,7 @@ class BotService:
             message.chat.id,
             f"已创建监听规则 #{rule['id']}：\n"
             f"{rule['source_title']} → {rule['target_title']}\n"
+            "将从最早的历史消息开始分批补转，补完后继续监听新消息。\n"
             "可在 Web“消息转发”页面管理。",
         )
 
@@ -335,11 +338,10 @@ class BotService:
             raise ValueError("源会话和目标会话不能相同")
         if self._bot_id is not None and int(target.id) == self._bot_id:
             raise ValueError("目标会话不能是 Bot 自己，否则会形成循环转发")
-        latest_id = await self._latest_message_id(client, source.id)
         checkpoint = (
             int(start_message_id)
-            if start_message_id is not None and int(start_message_id) > 0
-            else latest_id
+            if start_message_id is not None and int(start_message_id) >= 0
+            else 0
         )
         return self.database.create_forward_rule(
             source_chat=source_ref,
@@ -375,13 +377,10 @@ class BotService:
         ):
             raise ValueError("源会话和目标会话不能相同")
         start_message_id = updates.pop("start_message_id", None)
-        if start_message_id is not None and int(start_message_id) > 0:
+        if start_message_id is not None and int(start_message_id) >= 0:
             updates["last_message_id"] = int(start_message_id)
         elif source_changed:
-            assert client is not None
-            updates["last_message_id"] = await self._latest_message_id(
-                client, chat_ref_value(updates["source_chat"])
-            )
+            updates["last_message_id"] = 0
         return self.database.update_forward_rule(rule_id, **updates)
 
     async def _resolve_chat(self, client: Client, value: str) -> tuple[str, Any]:
@@ -401,34 +400,30 @@ class BotService:
         )
 
     @staticmethod
-    async def _latest_message_id(client: Client, chat_id: int | str) -> int:
-        async for message in client.get_chat_history(chat_id, limit=1):
-            return int(message.id)
-        return 0
-
-    @staticmethod
     async def _collect_after(
         client: Client,
         chat_id: int | str,
         last_message_id: int,
         *,
-        max_messages: int = 500,
+        max_messages: int = FORWARD_BATCH_SIZE,
     ) -> list[Any]:
-        messages: list[Any] = []
+        messages: deque[Any] = deque(maxlen=max_messages)
         offset_id = 0
-        while len(messages) < max_messages:
+        while True:
             batch = [
                 message
                 async for message in client.get_chat_history(
                     chat_id,
-                    limit=min(100, max_messages - len(messages)),
+                    limit=min(100, max_messages),
                     offset_id=offset_id,
                     min_id=last_message_id,
                 )
             ]
             if not batch:
                 break
-            messages.extend(batch)
+            messages.extend(
+                message for message in batch if int(message.id) > last_message_id
+            )
             oldest_id = int(batch[-1].id)
             if oldest_id <= last_message_id or oldest_id == offset_id:
                 break

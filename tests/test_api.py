@@ -417,6 +417,8 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert 'id="forward-form"' in forwarding.text
     assert 'id="forward-rule-list"' in forwarding.text
     assert "/listen_forward" in forwarding.text
+    assert "补转历史并持续监听新消息" in forwarding.text
+    assert "从最早消息开始" in forwarding.text
     assert "重启 Bot" in forwarding.text
 
     setup = client.get("/setup?edit=1")

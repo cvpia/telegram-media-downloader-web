@@ -57,17 +57,13 @@ def test_normalize_chat_ref_rejects_private_invite_links():
 
 
 @pytest.mark.asyncio
-async def test_create_rule_resolves_chats_and_sets_latest_checkpoint(tmp_path: Path):
+async def test_create_rule_resolves_chats_and_starts_from_earliest_history(tmp_path: Path):
     class FakeClient:
         async def get_chat(self, ref):
             return {
                 "@source": SimpleNamespace(id=-100111, title="Source"),
                 "@target": SimpleNamespace(id=-100222, title="Target"),
             }[ref]
-
-        async def get_chat_history(self, chat_id, limit):
-            assert limit == 1
-            yield _message(99)
 
     service, database = _service(tmp_path, FakeClient())
 
@@ -79,8 +75,45 @@ async def test_create_rule_resolves_chats_and_sets_latest_checkpoint(tmp_path: P
 
     assert rule["source_chat"] == "-100111"
     assert rule["target_chat"] == "-100222"
-    assert rule["last_message_id"] == 99
+    assert rule["last_message_id"] == 0
     assert database.get_forward_rule(rule["id"])["source_title"] == "Source"
+
+
+@pytest.mark.asyncio
+async def test_collect_after_returns_oldest_unprocessed_batch(tmp_path: Path):
+    class FakeClient:
+        async def get_chat_history(self, chat_id, *, limit, offset_id, min_id):
+            batches = {
+                0: [_message(6), _message(5), _message(4)],
+                4: [_message(3), _message(2), _message(1)],
+            }
+            for message in batches.get(offset_id, []):
+                yield message
+
+    messages = await BotService._collect_after(
+        FakeClient(), -100111, 0, max_messages=3
+    )
+
+    assert [message.id for message in messages] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_update_rule_allows_resetting_checkpoint_to_earliest(tmp_path: Path):
+    service, database = _service(tmp_path)
+    rule = database.create_forward_rule(
+        source_chat="-100111",
+        source_title="Source",
+        target_chat="-100222",
+        target_title="Target",
+        filter_expression="",
+        enabled=True,
+        last_message_id=500,
+    )
+
+    updated = await service.update_rule(rule["id"], start_message_id=0)
+
+    assert updated is not None
+    assert updated["last_message_id"] == 0
 
 
 @pytest.mark.asyncio

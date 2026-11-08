@@ -2,7 +2,7 @@
 {% block title %}消息转发 · {{ app_name }}{% endblock %}
 {% block content %}
 <section class="content-heading">
-  <div><div class="eyebrow">MESSAGE FORWARDING</div><h1>消息转发</h1><p class="muted">监听源会话的新消息，自动转发到目标会话；也可通过 Telegram Bot 管理任务。</p></div>
+  <div><div class="eyebrow">MESSAGE FORWARDING</div><h1>消息转发</h1><p class="muted">先补转源会话的历史消息，再持续监听新消息并自动转发到目标会话；也可通过 Telegram Bot 管理任务。</p></div>
   <div class="button-row"><button class="button button-ghost" id="restart-bot" type="button">重启 Bot</button><button class="button button-primary" id="check-all-rules" type="button">立即检查全部</button></div>
 </section>
 
@@ -21,7 +21,7 @@
       <code>/start</code><span>显示机器人使用说明</span>
       <code>/download 源 开始ID 结束ID</code><span>批量下载指定范围</span>
       <code>/forward 源 目标 开始ID 结束ID</code><span>立即转发指定范围</span>
-      <code>/listen_forward 源 目标 [筛选]</code><span>监听并自动转发新消息</span>
+      <code>/listen_forward 源 目标 [筛选]</code><span>补转历史并持续监听新消息</span>
       <code>/stop_listen 规则ID</code><span>停用监听规则</span>
     </div>
     <div class="notice notice-info forward-note">直接把媒体消息发给 Bot，会保存到服务器下载目录。</div>
@@ -30,7 +30,7 @@
 
 <section class="two-column-layout forward-layout">
   <article class="panel">
-    <div class="panel-heading"><div><h2 id="forward-form-title">添加监听规则</h2><p class="muted">空筛选表示转发所有新消息</p></div><button class="link-button" id="reset-forward-form" type="button">重置</button></div>
+    <div class="panel-heading"><div><h2 id="forward-form-title">添加监听规则</h2><p class="muted">空筛选表示转发所有历史及新消息</p></div><button class="link-button" id="reset-forward-form" type="button">重置</button></div>
     <form class="stack-form" id="forward-form">
       <div class="form-grid">
         <label><span>源会话</span><input id="forward-source" type="text" list="forward-source-options" placeholder="@source 或 -100..." required></label>
@@ -40,7 +40,8 @@
       <datalist id="forward-target-options"></datalist>
       <label><span>筛选表达式（可选）</span><textarea id="forward-filter" rows="4" placeholder="例如：media_type == 'video' and file_size > 100MB"></textarea><small>支持与频道下载规则相同的字段和语法。</small></label>
       <div class="form-grid">
-        <label><span>起始消息 ID（可选）</span><input id="forward-start-id" type="number" min="0" step="1" placeholder="留空从当前最新消息之后开始"></label>
+        <label><span>起始消息 ID（可选）</span><input id="forward-start-id" type="number" min="0" step="1" placeholder="留空或填 0：从最早历史消息开始"><small>新规则默认补转全部历史；编辑旧规则时改为 0 可重新补转历史，已经转发过的消息可能重复。</small></label>
+        <div class="button-row"><button class="button button-ghost button-small" id="forward-start-beginning" type="button">从最早消息开始</button></div>
         <label class="check-item forward-enabled"><input id="forward-enabled" type="checkbox" checked><span>创建后立即启用监听</span></label>
       </div>
       <p class="form-error" id="forward-form-error" hidden></p>
@@ -49,7 +50,7 @@
   </article>
 
   <article class="panel">
-    <div class="panel-heading"><div><h2>监听规则</h2><p class="muted">定时检查源会话并转发新消息</p></div><span class="tag" id="forward-rule-count">0 条</span></div>
+    <div class="panel-heading"><div><h2>监听规则</h2><p class="muted">分批补转历史消息，并持续检查新消息</p></div><span class="tag" id="forward-rule-count">0 条</span></div>
     <div id="forward-rule-list" class="task-list"><p class="empty-state">尚未配置监听规则</p></div>
   </article>
 </section>
@@ -130,7 +131,7 @@ function editRule(ruleId) {
   document.getElementById('forward-source').value = rule.source_chat;
   document.getElementById('forward-target').value = rule.target_chat;
   document.getElementById('forward-filter').value = rule.filter_expression || '';
-  document.getElementById('forward-start-id').value = '';
+  document.getElementById('forward-start-id').value = String(rule.last_message_id || 0);
   document.getElementById('forward-enabled').checked = Boolean(rule.enabled);
   document.getElementById('forward-form-title').textContent = `编辑监听规则 #${rule.id}`;
   document.getElementById('forward-submit').textContent = '保存规则';
@@ -187,6 +188,9 @@ document.getElementById('forward-rule-list').addEventListener('click', async (ev
 });
 
 document.getElementById('reset-forward-form').addEventListener('click', resetForwardForm);
+document.getElementById('forward-start-beginning').addEventListener('click', () => {
+  document.getElementById('forward-start-id').value = '0';
+});
 document.getElementById('restart-bot').addEventListener('click', async () => {
   try {
     botStatus = await TMD.api('/api/bot/restart', { method: 'POST', timeoutMs: 30000 });
