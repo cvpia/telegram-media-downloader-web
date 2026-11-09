@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.10.1
+
+- 修复监听规则使用 `-100...` 数字频道 ID 时出现 `CHANNEL_INVALID`（`channels.GetChannels`）的问题。
+- 同步频道列表时一并缓存 Telegram Peer 的 `access_hash`，并在监听检查前自动修复失效的数字频道引用。
+- 应用退出时持久化 Telegram Peer 缓存，避免重启后监听规则再次无法解析频道。
+
 ## 3.10.0
 
 - 监听转发规则默认从源会话最早的历史消息开始，不再只监听创建规则后的新消息。

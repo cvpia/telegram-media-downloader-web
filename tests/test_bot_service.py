@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pyrogram.errors import ChannelInvalid
 
 from app.bot_service import BotService, normalize_chat_ref
 from app.database import Database
@@ -77,6 +78,59 @@ async def test_create_rule_resolves_chats_and_starts_from_earliest_history(tmp_p
     assert rule["target_chat"] == "-100222"
     assert rule["last_message_id"] == 0
     assert database.get_forward_rule(rule["id"])["source_title"] == "Source"
+
+
+@pytest.mark.asyncio
+async def test_create_rule_refreshes_numeric_channel_peer_cache(tmp_path: Path):
+    class FakeClient:
+        ready = False
+
+        async def get_chat(self, ref):
+            if ref == -100111 and not self.ready:
+                raise ChannelInvalid(
+                    value=None,
+                    rpc_name="channels.GetChannels",
+                )
+            return {
+                -100111: SimpleNamespace(id=-100111, title="Source"),
+                "@source": SimpleNamespace(id=-100111, title="Source"),
+                "@target": SimpleNamespace(id=-100222, title="Target"),
+            }[ref]
+
+    client = FakeClient()
+
+    async def list_dialogs(limit):
+        assert limit == 1000
+        client.ready = True
+        return [
+            {
+                "id": "-100111",
+                "title": "Source",
+                "username": "source",
+            }
+        ]
+
+    database = Database(tmp_path / "app.db")
+    database.initialize()
+    telegram = SimpleNamespace(
+        get_client=lambda: _async_value(client),
+        list_dialogs=list_dialogs,
+    )
+    service = BotService(
+        database,
+        SimpleNamespace(telegram_connected=True),
+        telegram,
+        SimpleNamespace(),
+        enabled=False,
+    )
+
+    rule = await service.create_rule(
+        source_chat="-100111",
+        target_chat="@target",
+    )
+
+    assert rule["source_chat"] == "-100111"
+    assert rule["source_title"] == "Source"
 
 
 @pytest.mark.asyncio
@@ -154,6 +208,79 @@ async def test_check_rule_forwards_new_matching_messages_in_order(tmp_path: Path
     assert updated["last_message_id"] == 13
     assert updated["forwarded_count"] == 2
     assert updated["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_check_rule_repairs_channel_invalid_peer_before_forwarding(tmp_path: Path):
+    copied = []
+
+    class FakeClient:
+        ready = False
+
+        async def resolve_peer(self, chat_id):
+            if not self.ready:
+                raise ChannelInvalid(
+                    value=None,
+                    rpc_name="channels.GetChannels",
+                )
+            return chat_id
+
+        async def get_chat(self, chat_id):
+            if not self.ready:
+                raise ChannelInvalid(
+                    value=None,
+                    rpc_name="channels.GetChannels",
+                )
+            return SimpleNamespace(id=int(chat_id), title=f"Chat {chat_id}")
+
+        async def get_chat_history(self, chat_id, **kwargs):
+            if not kwargs.get("offset_id"):
+                yield _message(11, "one")
+
+        async def copy_message(self, chat_id, from_chat_id, message_id):
+            copied.append((chat_id, from_chat_id, message_id))
+
+    client = FakeClient()
+    refresh_calls = 0
+
+    async def list_dialogs(limit):
+        nonlocal refresh_calls
+        assert limit == 1000
+        refresh_calls += 1
+        client.ready = True
+        return [
+            {"id": "-100111", "title": "Source", "username": "source"},
+            {"id": "-100222", "title": "Target", "username": "target"},
+        ]
+
+    database = Database(tmp_path / "app.db")
+    database.initialize()
+    service = BotService(
+        database,
+        SimpleNamespace(telegram_connected=True),
+        SimpleNamespace(
+            get_client=lambda: _async_value(client),
+            list_dialogs=list_dialogs,
+        ),
+        SimpleNamespace(),
+        enabled=False,
+    )
+    rule = database.create_forward_rule(
+        source_chat="-100111",
+        source_title="Source",
+        target_chat="-100222",
+        target_title="Target",
+        filter_expression="",
+        enabled=True,
+        last_message_id=10,
+    )
+
+    result = await service.check_rule(rule["id"])
+
+    assert refresh_calls == 1
+    assert copied == [(-100222, -100111, 11)]
+    assert result["forwarded"] == 1
+    assert database.get_forward_rule(rule["id"])["last_error"] is None
 
 
 @pytest.mark.asyncio

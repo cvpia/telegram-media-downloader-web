@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from pyrogram import Client, filters
+from pyrogram.errors import ChannelInvalid, PeerIdInvalid
 from pyrogram.handlers import MessageHandler
 from pyrogram.types import BotCommand
 
@@ -385,10 +386,38 @@ class BotService:
 
     async def _resolve_chat(self, client: Client, value: str) -> tuple[str, Any]:
         ref = normalize_chat_ref(value)
-        chat = await client.get_chat(chat_ref_value(ref))
+        try:
+            chat = await client.get_chat(chat_ref_value(ref))
+        except (ChannelInvalid, PeerIdInvalid):
+            fallback_ref = await self._refresh_numeric_chat_ref(ref)
+            if fallback_ref is None:
+                raise
+            chat = await client.get_chat(chat_ref_value(fallback_ref))
         if chat is None:
             raise ValueError(f"无法读取会话：{value}")
         return str(int(chat.id)), chat
+
+    async def _refresh_numeric_chat_ref(self, ref: str) -> str | None:
+        """Refresh Pyrogram's peer cache before retrying a numeric channel id."""
+        if not NUMERIC_CHAT_RE.fullmatch(ref):
+            return None
+        list_dialogs = getattr(self.telegram, "list_dialogs", None)
+        if not callable(list_dialogs):
+            return None
+        await list_dialogs(limit=1000)
+        return ref
+
+    async def _ensure_rule_peers(self, client: Client, rule: dict[str, Any]) -> None:
+        """Repair expired numeric peers from the dialog cache before checking."""
+        resolve_peer = getattr(client, "resolve_peer", None)
+        if not callable(resolve_peer):
+            return
+        for field in ("source_chat", "target_chat"):
+            ref = str(rule[field])
+            try:
+                await resolve_peer(chat_ref_value(ref))
+            except (ChannelInvalid, PeerIdInvalid):
+                await self._resolve_chat(client, ref)
 
     @staticmethod
     def _chat_title(chat: Any, fallback: str) -> str:
@@ -561,6 +590,7 @@ class BotService:
             forwarded = 0
             skipped = 0
             try:
+                await self._ensure_rule_peers(client, rule)
                 messages = await self._collect_after(
                     client, source_chat, last_processed
                 )

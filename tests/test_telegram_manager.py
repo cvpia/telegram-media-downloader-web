@@ -128,6 +128,93 @@ def test_dialog_info_for_channel_and_user():
     assert user_info["avatar_url"] == ""
 
 
+@pytest.mark.asyncio
+async def test_list_dialogs_persists_peer_access_hashes(tmp_path, monkeypatch):
+    manager = TelegramManager(settings=None, session_dir=tmp_path)
+    channel = SimpleNamespace(
+        id=123,
+        title="Cached Channel",
+        username="cached_channel",
+        megagroup=False,
+        access_hash=456,
+        photo=None,
+    )
+    response = raw.types.messages.Dialogs(
+        dialogs=[
+            raw.types.Dialog(
+                peer=raw.types.PeerChannel(channel_id=123),
+                top_message=10,
+                read_inbox_max_id=0,
+                read_outbox_max_id=0,
+                unread_count=0,
+                unread_mentions_count=0,
+                unread_reactions_count=0,
+                notify_settings=None,
+            )
+        ],
+        messages=[],
+        chats=[channel],
+        users=[],
+    )
+
+    class Storage:
+        def __init__(self):
+            self.save_calls = 0
+
+        async def save(self):
+            self.save_calls += 1
+
+    class FakeClient:
+        def __init__(self):
+            self.fetched_peer_batches = []
+            self.storage = Storage()
+
+        async def invoke(self, request, sleep_threshold):
+            assert isinstance(request, raw.functions.messages.GetDialogs)
+            assert sleep_threshold == 30
+            return response
+
+        async def fetch_peers(self, peers):
+            self.fetched_peer_batches.append(peers)
+
+    client = FakeClient()
+
+    async def fake_get_client():
+        return client
+
+    monkeypatch.setattr(manager, "get_client", fake_get_client)
+    dialogs = await manager.list_dialogs()
+
+    assert dialogs[0]["id"] == "-1000000000123"
+    assert client.fetched_peer_batches == [[channel]]
+    assert client.storage.save_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_close_persists_peer_cache_before_disconnect(tmp_path):
+    manager = TelegramManager(settings=None, session_dir=tmp_path)
+
+    class FakeClient:
+        is_connected = True
+
+        def __init__(self):
+            self.events = []
+            self.storage = SimpleNamespace(save=self.save)
+
+        async def save(self):
+            self.events.append("save")
+
+        async def disconnect(self):
+            self.events.append("disconnect")
+
+    client = FakeClient()
+    manager._client = client
+
+    await manager.close()
+
+    assert client.events == ["save", "disconnect"]
+
+
 def test_clock_sync_codes_are_detected():
     assert TelegramManager.is_clock_sync_error(BadMsgNotification(16))
     assert TelegramManager.is_clock_sync_error(BadMsgNotification(17))

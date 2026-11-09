@@ -394,6 +394,10 @@ class TelegramManager:
                 ),
                 sleep_threshold=30,
             )
+            # Pyrogram resolves numeric channel ids through its peer cache.
+            # GetDialogs already returns full access hashes, so persist them
+            # before later rules use the numeric ids shown by the Web UI.
+            await client.fetch_peers([*response.users, *response.chats])
             users = {user.id: user for user in response.users}
             chats = {chat.id: chat for chat in response.chats}
             messages = {message.id: message for message in response.messages}
@@ -435,6 +439,14 @@ class TelegramManager:
             else:
                 offset_date = 0
             offset_peer = self._input_peer(last_dialog.peer, users, chats)
+
+        storage = getattr(client, "storage", None)
+        save = getattr(storage, "save", None)
+        if callable(save):
+            try:
+                await save()
+            except Exception:
+                logger.warning("Unable to persist Telegram peer cache", exc_info=True)
 
         dialogs.sort(
             key=lambda item: (
@@ -814,4 +826,11 @@ class TelegramManager:
             client = self._client
             self._client = None
         if client is not None and client.is_connected:
+            storage = getattr(client, "storage", None)
+            save = getattr(storage, "save", None)
+            if callable(save):
+                try:
+                    await save()
+                except Exception:
+                    logger.warning("Unable to persist Telegram peer cache", exc_info=True)
             await client.disconnect()
