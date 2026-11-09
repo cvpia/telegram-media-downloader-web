@@ -48,6 +48,7 @@ DOWNLOAD_RETRY_DELAYS = (2.0, 8.0, 25.0)
 CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
 DOWNLOAD_PROGRESS_PERSIST_SECONDS = 2.0
 RESOURCE_SNAPSHOT_TTL_SECONDS = 5.0
+AUTO_RETRY_FAILED_LIMIT = 500
 
 
 class PermanentDownloadError(RuntimeError):
@@ -523,6 +524,20 @@ class DownloaderService:
                 await self._download_chat(chat)
                 if self.state in {"paused", "stopped"}:
                     break
+
+            # Once the normal queue is exhausted, give terminal failures one
+            # final automatic pass. Retry records run before the task can enter
+            # the completed state, but this cycle is not repeated indefinitely.
+            requeue = getattr(self.database, "requeue_failed_downloads", None)
+            if self.state == "running" and callable(requeue):
+                requeued = int(requeue(AUTO_RETRY_FAILED_LIMIT) or 0)
+                if requeued:
+                    self.current_chat = "失败资源重试"
+                    for chat in chats:
+                        await self._wait_if_paused()
+                        await self._download_chat(chat)
+                        if self.state in {"paused", "stopped"}:
+                            break
             if self.state == "running":
                 self.state = "completed"
         except asyncio.CancelledError:

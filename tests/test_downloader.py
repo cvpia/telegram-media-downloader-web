@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.downloader import (
+    AUTO_RETRY_FAILED_LIMIT,
     CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     DOWNLOAD_CHUNK_SIZE,
     DownloaderService,
@@ -913,6 +914,64 @@ def test_circuit_breaker_pauses_after_consecutive_terminal_failures():
     assert "已自动暂停" in service.last_error
     service._record_terminal_success()
     assert service._consecutive_terminal_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_run_retries_failed_downloads_after_normal_queue(monkeypatch):
+    chat = {"id": 1, "title": "Demo", "enabled": 1}
+    requeue_limits = []
+
+    def requeue_failed(limit):
+        requeue_limits.append(limit)
+        return 2
+
+    database = SimpleNamespace(
+        list_chats=lambda: [chat],
+        requeue_failed_downloads=requeue_failed,
+    )
+    service = DownloaderService(database, SimpleNamespace(), telegram=None)
+    service.state = "running"
+    calls = []
+
+    async def fake_download_chat(received_chat):
+        calls.append(
+            {
+                "chat": received_chat,
+                "current_chat": service.current_chat,
+                "state": service.state,
+            }
+        )
+
+    monkeypatch.setattr(service, "_download_chat", fake_download_chat)
+
+    await service._run()
+
+    assert len(calls) == 2
+    assert requeue_limits == [AUTO_RETRY_FAILED_LIMIT]
+    assert calls[1]["current_chat"] == "失败资源重试"
+    assert service.state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_retry_failed_downloads_after_pause(monkeypatch):
+    chat = {"id": 1, "title": "Demo", "enabled": 1}
+    requeue_limits = []
+    database = SimpleNamespace(
+        list_chats=lambda: [chat],
+        requeue_failed_downloads=lambda limit: requeue_limits.append(limit) or 1,
+    )
+    service = DownloaderService(database, SimpleNamespace(), telegram=None)
+    service.state = "running"
+
+    async def fake_download_chat(received_chat):
+        service.state = "paused"
+
+    monkeypatch.setattr(service, "_download_chat", fake_download_chat)
+
+    await service._run()
+
+    assert requeue_limits == []
+    assert service.state == "paused"
 
 
 @pytest.mark.asyncio
