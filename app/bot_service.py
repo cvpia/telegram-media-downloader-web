@@ -6,11 +6,13 @@ import asyncio
 import logging
 import re
 import shlex
+import tempfile
 from collections import deque
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from pyrogram import Client, filters
+from pyrogram import Client, enums, filters
 from pyrogram.errors import ChannelInvalid, ChatForwardsRestricted, PeerIdInvalid
 from pyrogram.handlers import MessageHandler
 from pyrogram.types import BotCommand
@@ -231,7 +233,7 @@ class BotService:
             "/download <源会话> <开始ID> <结束ID> [筛选表达式]\n\n"
             "立即转发消息范围：\n"
             "/forward <源会话> <目标会话> <开始ID> <结束ID> [筛选表达式]\n\n"
-            "监听并自动转发历史及新消息：\n"
+            "监听并自动转发历史及新消息（禁止转发/保存内容会自动重新上传）：\n"
             "/listen_forward <源会话> <目标会话> [筛选表达式]\n\n"
             "停用监听规则：\n"
             "/stop_listen <规则ID|all>\n\n"
@@ -530,6 +532,14 @@ class BotService:
         target_chat: int | str,
         message: Any,
     ) -> None:
+        if bool(getattr(message, "has_protected_content", False)):
+            try:
+                await self._reupload_message(user_client, target_chat, message)
+            except Exception as exc:
+                raise ValueError(
+                    "源频道启用了 Telegram“禁止转发/保存”保护，且媒体重新上传失败"
+                ) from exc
+            return
         copy_method = getattr(message, "copy", None)
         try:
             if callable(copy_method):
@@ -540,10 +550,124 @@ class BotService:
                 from_chat_id=source_chat,
                 message_id=int(message.id),
             )
-        except ChatForwardsRestricted as exc:
-            raise ValueError(
-                "源频道启用了 Telegram“禁止转发/保存”保护，Telegram 不允许转发其中的消息"
-            ) from exc
+        except ChatForwardsRestricted:
+            logger.info(
+                "Telegram blocked forwarding message %s; retrying by re-uploading its media",
+                getattr(message, "id", "unknown"),
+            )
+            try:
+                await self._reupload_message(user_client, target_chat, message)
+            except Exception as fallback_exc:
+                raise ValueError(
+                    "源频道启用了 Telegram“禁止转发/保存”保护，且媒体重新上传失败"
+                ) from fallback_exc
+
+    @staticmethod
+    def _reupload_entities(message: Any, *, caption: bool) -> list[Any] | None:
+        field = "caption_entities" if caption else "entities"
+        entities = getattr(message, field, None)
+        return list(entities) if entities else None
+
+    async def _reupload_message(
+        self,
+        user_client: Client,
+        target_chat: int | str,
+        message: Any,
+    ) -> None:
+        """Re-upload protected content as a new message without a forward header."""
+        media_info = self._message_context(message)[1]
+        if media_info is None:
+            text = str(getattr(message, "text", None) or "").strip()
+            if not text:
+                raise ValueError("该受限消息不包含可重新上传的媒体或文本")
+            await user_client.send_message(
+                target_chat,
+                text,
+                parse_mode=enums.ParseMode.DISABLED,
+                entities=self._reupload_entities(message, caption=False),
+            )
+            return
+
+        media_type, media = media_info
+        original_name = str(getattr(media, "file_name", "") or "")
+        extension = media_extension(media_type, media, original_name or None)
+        with tempfile.TemporaryDirectory(prefix="tmd-forward-") as temp_dir:
+            temp_path = Path(temp_dir) / f"{int(message.id)}{extension}"
+            downloaded = await message.download(file_name=str(temp_path))
+            if not downloaded:
+                raise ValueError("无法下载受限媒体，Telegram 未返回文件")
+            media_path = str(downloaded)
+            caption = str(getattr(message, "caption", None) or "")
+            caption_entities = self._reupload_entities(message, caption=True)
+            caption_kwargs: dict[str, Any] = {
+                "caption": caption,
+                "parse_mode": enums.ParseMode.DISABLED,
+            }
+            if caption_entities is not None:
+                caption_kwargs["caption_entities"] = caption_entities
+
+            if media_type == "photo":
+                await user_client.send_photo(
+                    target_chat, media_path, **caption_kwargs
+                )
+            elif media_type == "video":
+                await user_client.send_video(
+                    target_chat,
+                    media_path,
+                    duration=int(getattr(media, "duration", 0) or 0),
+                    width=int(getattr(media, "width", 0) or 0),
+                    height=int(getattr(media, "height", 0) or 0),
+                    file_name=original_name or None,
+                    supports_streaming=bool(
+                        getattr(media, "supports_streaming", True)
+                    ),
+                    **caption_kwargs,
+                )
+            elif media_type == "audio":
+                await user_client.send_audio(
+                    target_chat,
+                    media_path,
+                    duration=int(getattr(media, "duration", 0) or 0),
+                    performer=getattr(media, "performer", None),
+                    title=getattr(media, "title", None),
+                    file_name=original_name or None,
+                    **caption_kwargs,
+                )
+            elif media_type == "animation":
+                await user_client.send_animation(
+                    target_chat,
+                    media_path,
+                    duration=int(getattr(media, "duration", 0) or 0),
+                    width=int(getattr(media, "width", 0) or 0),
+                    height=int(getattr(media, "height", 0) or 0),
+                    file_name=original_name or None,
+                    **caption_kwargs,
+                )
+            elif media_type == "voice":
+                await user_client.send_voice(
+                    target_chat,
+                    media_path,
+                    duration=int(getattr(media, "duration", 0) or 0),
+                    **caption_kwargs,
+                )
+            elif media_type == "video_note":
+                await user_client.send_video_note(
+                    target_chat,
+                    media_path,
+                    duration=int(getattr(media, "duration", 0) or 0),
+                    length=int(
+                        getattr(media, "length", 0)
+                        or getattr(media, "width", 0)
+                        or 1
+                    ),
+                )
+            else:
+                await user_client.send_document(
+                    target_chat,
+                    media_path,
+                    file_name=original_name or None,
+                    **caption_kwargs,
+                )
 
     async def forward_range(
         self,

@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pyrogram import enums
 from pyrogram.errors import ChannelInvalid, ChatForwardsRestricted
 
 from app.bot_service import BotService, normalize_chat_ref
@@ -176,6 +177,128 @@ async def test_copy_message_reports_forwarding_restriction(tmp_path: Path):
             "@target",
             message,
         )
+
+
+@pytest.mark.asyncio
+async def test_copy_message_reuploads_protected_video_as_new_message(tmp_path: Path):
+    service, _ = _service(tmp_path)
+    uploaded = []
+
+    class FakeClient:
+        async def copy_message(self, **kwargs):
+            raise AssertionError("protected messages must not use copy_message")
+
+        async def send_video(self, chat_id, video, **kwargs):
+            uploaded.append((chat_id, video, kwargs))
+            assert Path(video).read_bytes() == b"video"
+
+    async def download(*, file_name):
+        Path(file_name).write_bytes(b"video")
+        return file_name
+
+    message = _message(90, "")
+    message.has_protected_content = True
+    message.caption = "受限视频标题"
+    message.caption_entities = []
+    message.entities = []
+    message.video = SimpleNamespace(
+        file_name="original.mp4",
+        mime_type="video/mp4",
+        file_size=5,
+        duration=61,
+        width=1920,
+        height=1080,
+        supports_streaming=True,
+    )
+    message.download = download
+
+    await service._copy_message(FakeClient(), -100111, -100222, message)
+
+    assert len(uploaded) == 1
+    chat_id, media_path, kwargs = uploaded[0]
+    assert chat_id == -100222
+    assert Path(media_path).suffix == ".mp4"
+    assert not Path(media_path).exists()
+    assert kwargs == {
+        "caption": "受限视频标题",
+        "parse_mode": enums.ParseMode.DISABLED,
+        "duration": 61,
+        "width": 1920,
+        "height": 1080,
+        "file_name": "original.mp4",
+        "supports_streaming": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_copy_message_falls_back_to_photo_upload_when_copy_is_restricted(
+    tmp_path: Path,
+):
+    service, _ = _service(tmp_path)
+    uploaded = []
+
+    class FakeClient:
+        async def send_photo(self, chat_id, photo, **kwargs):
+            uploaded.append((chat_id, photo, kwargs))
+            assert Path(photo).read_bytes() == b"photo"
+
+    async def copy_message(**kwargs):
+        raise ChatForwardsRestricted(
+            value=None,
+            rpc_name="messages.SendMedia",
+        )
+
+    async def download(*, file_name):
+        Path(file_name).write_bytes(b"photo")
+        return file_name
+
+    message = _message(91, "")
+    message.copy = copy_message
+    message.caption = "photo caption"
+    message.caption_entities = []
+    message.entities = []
+    message.photo = SimpleNamespace(file_size=5)
+    message.download = download
+
+    await service._copy_message(FakeClient(), -100111, -100222, message)
+
+    assert len(uploaded) == 1
+    chat_id, media_path, kwargs = uploaded[0]
+    assert chat_id == -100222
+    assert Path(media_path).suffix == ".jpg"
+    assert kwargs == {
+        "caption": "photo caption",
+        "parse_mode": enums.ParseMode.DISABLED,
+    }
+
+
+@pytest.mark.asyncio
+async def test_copy_message_reuploads_protected_text_without_forward_header(
+    tmp_path: Path,
+):
+    service, _ = _service(tmp_path)
+    sent = []
+
+    class FakeClient:
+        async def send_message(self, chat_id, text, **kwargs):
+            sent.append((chat_id, text, kwargs))
+
+    message = _message(92, "pure text")
+    message.has_protected_content = True
+    message.entities = []
+
+    await service._copy_message(FakeClient(), -100111, -100222, message)
+
+    assert sent == [
+        (
+            -100222,
+            "pure text",
+            {
+                "parse_mode": enums.ParseMode.DISABLED,
+                "entities": None,
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio

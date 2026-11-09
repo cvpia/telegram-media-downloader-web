@@ -2,7 +2,7 @@
 
 基于 FastAPI 重写的 Telegram 媒体下载器。目标是把原项目需要手工编辑 YAML、进入终端完成首次登录的流程，改成浏览器内一次完成。
 
-当前版本：**3.10.5**
+当前版本：**3.11.0**
 
 ## 功能
 
@@ -15,6 +15,7 @@
 - 配置 Bot 后自动启动 Telegram 机器人，可通过命令下载、转发或监听转发消息
 - Web 端新增消息转发管理，可配置源会话、目标会话、筛选条件和监听状态
 - 监听规则默认从最早历史消息开始分批补转，历史走完后继续自动转发新消息
+- 源消息启用 Telegram“禁止转发/保存”保护时，自动下载媒体并以当前登录账号重新上传，保留文本和媒体信息
 - 视频优先使用频道消息文字作为下载文件名，没有文字时自动使用视频原文件名
 - 登录会话保存在服务器本地
 - 频道管理使用本地缓存优先展示，随后在后台同步账号会话和群头像
@@ -89,7 +90,7 @@ message_date >= 2025.01.01 and media_type == r'(video|audio)'
 Docker Hub 镜像：
 
 ```bash
-docker pull xxoo520zls/telegram-media-downloader-web:3.10.5
+docker pull xxoo520zls/telegram-media-downloader-web:3.11.0
 ```
 
 也可以直接使用 Compose 构建并启动（配置中的 `image` 会同步标记本地构建结果）：
@@ -136,7 +137,7 @@ docker run -d \
   -v "$PWD/data:/data" \
   -v "$PWD/downloads:/downloads" \
   --restart unless-stopped \
-  xxoo520zls/telegram-media-downloader-web:3.10.5
+  xxoo520zls/telegram-media-downloader-web:3.11.0
 ```
 
 ## 本地开发
