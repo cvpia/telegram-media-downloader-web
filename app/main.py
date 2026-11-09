@@ -774,9 +774,16 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
 
     @app.get("/api/downloads/history", dependencies=[Depends(require_admin)])
     async def download_history(
-        request: Request, page: int = 1, page_size: int = 10
+        request: Request,
+        page: int = 1,
+        page_size: int = 10,
+        status: str = "all",
     ) -> dict[str, Any]:
-        return service_container(request).downloader.history_page(page, page_size)
+        return service_container(request).downloader.history_page(
+            page,
+            page_size,
+            status,
+        )
 
     @app.get(
         "/api/downloads/{download_id}/media",

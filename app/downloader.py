@@ -315,6 +315,8 @@ class DownloaderService:
         chats = self.database.list_chats()
         counter = getattr(self.database, "download_counts", None)
         counts = counter() if callable(counter) else {}
+        traffic_counter = getattr(self.database, "download_traffic_bytes", None)
+        total_traffic = int(traffic_counter() or 0) if callable(traffic_counter) else 0
         now = time.monotonic()
         active = [self._active_snapshot(item, now) for item in self._active.values()]
         total_downloaded = sum(int(item.get("downloaded") or 0) for item in active)
@@ -337,6 +339,7 @@ class DownloaderService:
                 "enabled_count": sum(bool(chat.get("enabled")) for chat in chats),
                 "total_speed": round(total_speed, 1),
                 "total_downloaded": total_downloaded,
+                "total_traffic": total_traffic,
                 "total_size": total_size,
                 "remaining": remaining,
                 "percent": round(total_downloaded / total_size * 100, 1)
@@ -355,22 +358,49 @@ class DownloaderService:
             "resource": self._resource_snapshot(),
         }
 
-    def history_page(self, page: int = 1, page_size: int = 10) -> dict[str, Any]:
+    def history_page(
+        self,
+        page: int = 1,
+        page_size: int = 10,
+        status_filter: str = "all",
+    ) -> dict[str, Any]:
         page_size = max(1, min(int(page_size), 50))
-        total = self.database.count_downloads(terminal_only=True)
+        if status_filter not in {"all", "success", "failed"}:
+            status_filter = "all"
+        statuses = {
+            "success": ("completed", "skipped"),
+            "failed": ("failed",),
+        }.get(status_filter)
+        total = self.database.count_downloads(
+            terminal_only=True,
+            statuses=statuses,
+        )
         pages = max(1, (total + page_size - 1) // page_size)
         page = max(1, min(int(page), pages))
         items = self.database.recent_downloads(
             page_size,
             offset=(page - 1) * page_size,
             terminal_only=True,
+            statuses=statuses,
         )
+        counter = getattr(self.database, "download_counts", None)
+        counts = counter() if callable(counter) else {}
+        success_count = int(counts.get("completed", 0)) + int(
+            counts.get("skipped", 0)
+        )
+        failed_count = int(counts.get("failed", 0))
         return {
             "items": items,
             "total": total,
             "page": page,
             "page_size": page_size,
             "pages": pages,
+            "status": status_filter,
+            "counts": {
+                "all": success_count + failed_count,
+                "success": success_count,
+                "failed": failed_count,
+            },
         }
 
     async def start(self) -> dict[str, Any]:

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from pyrogram import Client, filters
-from pyrogram.errors import ChannelInvalid, PeerIdInvalid
+from pyrogram.errors import ChannelInvalid, ChatForwardsRestricted, PeerIdInvalid
 from pyrogram.handlers import MessageHandler
 from pyrogram.types import BotCommand
 
@@ -395,7 +395,12 @@ class BotService:
             chat = await client.get_chat(chat_ref_value(fallback_ref))
         if chat is None:
             raise ValueError(f"无法读取会话：{value}")
-        return str(int(chat.id)), chat
+        return self._preferred_chat_ref(chat, str(int(chat.id))), chat
+
+    @staticmethod
+    def _preferred_chat_ref(chat: Any, fallback: str) -> str:
+        username = str(getattr(chat, "username", "") or "").lstrip("@")
+        return f"@{username}" if username else fallback
 
     async def _refresh_numeric_chat_ref(self, ref: str) -> str | None:
         """Refresh Pyrogram's peer cache before retrying a numeric channel id."""
@@ -407,17 +412,35 @@ class BotService:
         await list_dialogs(limit=1000)
         return ref
 
-    async def _ensure_rule_peers(self, client: Client, rule: dict[str, Any]) -> None:
+    async def _ensure_rule_peers(
+        self,
+        client: Client,
+        rule: dict[str, Any],
+    ) -> tuple[int | str, int | str]:
         """Repair expired numeric peers from the dialog cache before checking."""
         resolve_peer = getattr(client, "resolve_peer", None)
-        if not callable(resolve_peer):
-            return
+        resolved: dict[str, str] = {}
         for field in ("source_chat", "target_chat"):
             ref = str(rule[field])
+            resolved[field] = ref
+            if not callable(resolve_peer):
+                continue
             try:
                 await resolve_peer(chat_ref_value(ref))
             except (ChannelInvalid, PeerIdInvalid):
-                await self._resolve_chat(client, ref)
+                repaired_ref, chat = await self._resolve_chat(client, ref)
+                resolved[field] = self._preferred_chat_ref(chat, repaired_ref)
+        updates = {
+            field: value
+            for field, value in resolved.items()
+            if value != str(rule[field])
+        }
+        if updates:
+            self.database.update_forward_rule(int(rule["id"]), **updates)
+        return (
+            chat_ref_value(resolved["source_chat"]),
+            chat_ref_value(resolved["target_chat"]),
+        )
 
     @staticmethod
     def _chat_title(chat: Any, fallback: str) -> str:
@@ -505,25 +528,22 @@ class BotService:
         user_client: Client,
         source_chat: int | str,
         target_chat: int | str,
-        message_id: int,
+        message: Any,
     ) -> None:
-        errors: list[Exception] = []
-        clients = [user_client, self._bot] if self._bot is not None else [user_client]
-        for client in clients:
-            if client is None:
-                continue
-            try:
-                await client.copy_message(
-                    chat_id=target_chat,
-                    from_chat_id=source_chat,
-                    message_id=message_id,
-                )
+        copy_method = getattr(message, "copy", None)
+        try:
+            if callable(copy_method):
+                await copy_method(chat_id=target_chat)
                 return
-            except Exception as exc:
-                errors.append(exc)
-        if errors:
-            raise errors[-1]
-        raise RuntimeError("没有可用的 Telegram 客户端")
+            await user_client.copy_message(
+                chat_id=target_chat,
+                from_chat_id=source_chat,
+                message_id=int(message.id),
+            )
+        except ChatForwardsRestricted as exc:
+            raise ValueError(
+                "源频道启用了 Telegram“禁止转发/保存”保护，Telegram 不允许转发其中的消息"
+            ) from exc
 
     async def forward_range(
         self,
@@ -547,7 +567,7 @@ class BotService:
             if not rule_filter.matches(context):
                 skipped += 1
                 continue
-            await self._copy_message(client, source.id, target.id, int(message.id))
+            await self._copy_message(client, source.id, target.id, message)
             forwarded += 1
         return {"forwarded": forwarded, "skipped": skipped, "checked": len(messages)}
 
@@ -584,13 +604,11 @@ class BotService:
                 return {"rule_id": rule_id, "forwarded": 0, "skipped": 0, "checked": 0}
             client = await self.telegram.get_client()
             rule_filter = compile_download_filter(rule.get("filter_expression"))
-            source_chat = chat_ref_value(rule["source_chat"])
-            target_chat = chat_ref_value(rule["target_chat"])
             last_processed = int(rule.get("last_message_id") or 0)
             forwarded = 0
             skipped = 0
             try:
-                await self._ensure_rule_peers(client, rule)
+                source_chat, target_chat = await self._ensure_rule_peers(client, rule)
                 messages = await self._collect_after(
                     client, source_chat, last_processed
                 )
@@ -601,7 +619,7 @@ class BotService:
                         last_processed = int(message.id)
                         continue
                     await self._copy_message(
-                        client, source_chat, target_chat, int(message.id)
+                        client, source_chat, target_chat, message
                     )
                     forwarded += 1
                     last_processed = int(message.id)

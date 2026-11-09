@@ -258,6 +258,7 @@ def test_download_status_uses_compact_live_payload(client: TestClient):
     assert "recent" not in payload
     assert "completed_count" in payload["summary"]
     assert "retry_wait_count" in payload["summary"]
+    assert "total_traffic" in payload["summary"]
 
 
 def test_retry_failed_download_action(client: TestClient, monkeypatch):
@@ -396,9 +397,14 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert "存储资源" in dashboard.text
     assert 'id="stat-speed"' in dashboard.text
     assert 'id="stat-eta"' in dashboard.text
+    assert 'id="stat-traffic"' in dashboard.text
+    assert "累计使用流量" in dashboard.text
     assert 'id="disk-free"' in dashboard.text
     assert 'data-monitor-tab="history"' in dashboard.text
     assert 'id="history-page-info"' in dashboard.text
+    assert 'id="history-page-jump"' in dashboard.text
+    assert 'data-history-status="success"' in dashboard.text
+    assert 'data-history-status="failed"' in dashboard.text
     assert "下载监控" in dashboard.text
     assert "data-play-media" in dashboard.text
     assert "data-preview-image" in dashboard.text
@@ -718,6 +724,16 @@ def test_media_preview_direct_download_and_history_api(
     assert len(payload["items"]) == 1
     assert downloading_id not in [item["id"] for item in payload["items"]]
     assert retrying_id not in [item["id"] for item in payload["items"]]
+    success_history = client.get(
+        "/api/downloads/history?page=1&page_size=10&status=success"
+    )
+    failed_history = client.get(
+        "/api/downloads/history?page=1&page_size=10&status=failed"
+    )
+    assert success_history.json()["total"] == 2
+    assert success_history.json()["counts"]["success"] == 2
+    assert failed_history.json()["total"] == 0
+    assert failed_history.json()["status"] == "failed"
 
     media = client.get(
         f"/api/downloads/{first_id}/media", headers={"Accept-Encoding": "gzip"}

@@ -561,6 +561,14 @@ class Database:
             ).fetchall()
         return {str(row["status"]): int(row["count"]) for row in rows}
 
+    def download_traffic_bytes(self) -> int:
+        """Return the total bytes recorded across active and historical downloads."""
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(SUM(downloaded_size), 0) AS total FROM downloads"
+            ).fetchone()
+        return int(row["total"] or 0)
+
     def requeue_failed_downloads(self, limit: int = 100) -> int:
         """Requeue a bounded number of terminal failures for a manual retry."""
         limit = max(1, min(int(limit), 500))
@@ -591,27 +599,42 @@ class Database:
         offset: int = 0,
         *,
         terminal_only: bool = False,
+        statuses: tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
-        where = (
-            "WHERE status NOT IN ('downloading', 'retry_wait')"
-            if terminal_only
-            else ""
-        )
+        clauses: list[str] = []
+        values: list[Any] = []
+        if terminal_only:
+            clauses.append("status NOT IN ('downloading', 'retry_wait')")
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            clauses.append(f"status IN ({placeholders})")
+            values.extend(statuses)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        values.extend((limit, max(0, offset)))
         with self._lock, self._connect() as connection:
             rows = connection.execute(
                 f"SELECT * FROM downloads {where} ORDER BY started_at DESC LIMIT ? OFFSET ?",
-                (limit, max(0, offset)),
+                values,
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def count_downloads(self, *, terminal_only: bool = False) -> int:
-        where = (
-            " WHERE status NOT IN ('downloading', 'retry_wait')"
-            if terminal_only
-            else ""
-        )
+    def count_downloads(
+        self,
+        *,
+        terminal_only: bool = False,
+        statuses: tuple[str, ...] | None = None,
+    ) -> int:
+        clauses: list[str] = []
+        values: list[Any] = []
+        if terminal_only:
+            clauses.append("status NOT IN ('downloading', 'retry_wait')")
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            clauses.append(f"status IN ({placeholders})")
+            values.extend(statuses)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._lock, self._connect() as connection:
             row = connection.execute(
-                f"SELECT COUNT(*) AS count FROM downloads{where}"
+                f"SELECT COUNT(*) AS count FROM downloads{where}", values
             ).fetchone()
         return int(row["count"])

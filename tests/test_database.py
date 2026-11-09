@@ -91,6 +91,41 @@ def test_dialog_cache_round_trip(tmp_path: Path):
     ]
 
 
+def test_download_history_filters_and_traffic_total(tmp_path: Path):
+    database = Database(tmp_path / "app.db")
+    database.initialize()
+    chat = database.upsert_chat("@history", "History")
+    completed_id = database.create_download(
+        chat["id"], "History", 1, "/downloads/one.mp4", "video", 100
+    )
+    failed_id = database.create_download(
+        chat["id"], "History", 2, "/downloads/two.mp4", "video", 200
+    )
+    skipped_id = database.create_download(
+        chat["id"], "History", 3, "/downloads/three.mp4", "video", 300
+    )
+    database.update_download(completed_id, status="completed", downloaded_size=100)
+    database.update_download(failed_id, status="failed", downloaded_size=50)
+    database.update_download(skipped_id, status="skipped", downloaded_size=300)
+
+    success = database.recent_downloads(
+        terminal_only=True,
+        statuses=("completed", "skipped"),
+    )
+    failed = database.recent_downloads(
+        terminal_only=True,
+        statuses=("failed",),
+    )
+
+    assert {item["id"] for item in success} == {completed_id, skipped_id}
+    assert [item["id"] for item in failed] == [failed_id]
+    assert database.count_downloads(
+        terminal_only=True,
+        statuses=("failed",),
+    ) == 1
+    assert database.download_traffic_bytes() == 450
+
+
 def test_database_backup_preserves_settings_and_channels(tmp_path: Path):
     database = Database(tmp_path / "app.db")
     database.initialize()

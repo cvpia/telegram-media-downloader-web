@@ -151,11 +151,12 @@ def test_downloader_snapshot_reports_speed_progress_and_disk(tmp_path: Path):
     settings = SimpleNamespace(download_dir=lambda: tmp_path)
     database = SimpleNamespace(
         download_counts=lambda: {
-            "completed": 3,
-            "failed": 4,
+            "completed": 2,
+            "failed": 1,
             "retry_wait": 1,
-            "skipped": 2,
+            "skipped": 1,
         },
+        download_traffic_bytes=lambda: 40 * 1024 * 1024,
         list_chats=lambda: [
             {"id": 1, "enabled": True},
             {"id": 2, "enabled": False},
@@ -185,14 +186,15 @@ def test_downloader_snapshot_reports_speed_progress_and_disk(tmp_path: Path):
         "enabled_count": 1,
         "total_speed": 1048576.0,
         "total_downloaded": 5 * 1024 * 1024,
+        "total_traffic": 40 * 1024 * 1024,
         "total_size": 10 * 1024 * 1024,
         "remaining": 5 * 1024 * 1024,
         "percent": 50.0,
         "eta_seconds": 5,
-        "completed_count": 3,
-        "failed_count": 4,
+        "completed_count": 2,
+        "failed_count": 1,
         "retry_wait_count": 1,
-        "terminal_count": 9,
+        "terminal_count": 4,
     }
     assert snapshot["active"][0]["percent"] == 50.0
     assert snapshot["active"][0]["speed"] == 1048576.0
@@ -551,9 +553,15 @@ def test_downloader_history_page_uses_offset_and_total(tmp_path: Path):
     database = SimpleNamespace(
         count_downloads=lambda **kwargs: 37,
         recent_downloads=lambda limit, offset=0, **kwargs: calls.append(
-            (limit, offset, kwargs.get("terminal_only"))
+            (
+                limit,
+                offset,
+                kwargs.get("terminal_only"),
+                kwargs.get("statuses"),
+            )
         )
         or [],
+        download_counts=lambda: {"completed": 20, "skipped": 5, "failed": 12},
         list_chats=lambda: [],
     )
     settings = SimpleNamespace(download_dir=lambda: tmp_path)
@@ -567,8 +575,47 @@ def test_downloader_history_page_uses_offset_and_total(tmp_path: Path):
         "page": 3,
         "page_size": 10,
         "pages": 4,
+        "status": "all",
+        "counts": {
+            "all": 37,
+            "success": 25,
+            "failed": 12,
+        },
     }
-    assert calls == [(10, 20, True)]
+    assert calls == [(10, 20, True, None)]
+
+
+def test_downloader_history_page_filters_failed_records(tmp_path: Path):
+    calls = []
+    database = SimpleNamespace(
+        count_downloads=lambda **kwargs: calls.append(kwargs) or 4,
+        recent_downloads=lambda limit, offset=0, **kwargs: calls.append(
+            (limit, offset, kwargs)
+        )
+        or [],
+        download_counts=lambda: {"completed": 8, "failed": 4},
+        list_chats=lambda: [],
+    )
+    service = DownloaderService(
+        database,
+        SimpleNamespace(download_dir=lambda: tmp_path),
+        telegram=None,
+    )
+
+    page = service.history_page(page=1, page_size=10, status_filter="failed")
+
+    assert page["status"] == "failed"
+    assert page["total"] == 4
+    assert page["counts"] == {"all": 12, "success": 8, "failed": 4}
+    assert calls[0] == {
+        "terminal_only": True,
+        "statuses": ("failed",),
+    }
+    assert calls[1] == (
+        10,
+        0,
+        {"terminal_only": True, "statuses": ("failed",)},
+    )
 
 
 def test_resumable_download_offset_aligns_partial_file(tmp_path: Path):

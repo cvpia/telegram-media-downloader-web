@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pyrogram.errors import ChannelInvalid
+from pyrogram.errors import ChannelInvalid, ChatForwardsRestricted
 
 from app.bot_service import BotService, normalize_chat_ref
 from app.database import Database
@@ -131,6 +131,51 @@ async def test_create_rule_refreshes_numeric_channel_peer_cache(tmp_path: Path):
 
     assert rule["source_chat"] == "-100111"
     assert rule["source_title"] == "Source"
+
+
+@pytest.mark.asyncio
+async def test_copy_message_reuses_source_message_without_bot_resolution(tmp_path: Path):
+    service, _ = _service(tmp_path)
+    copied = []
+
+    class FakeClient:
+        async def copy_message(self, **kwargs):
+            raise AssertionError("source message object should be reused")
+
+    async def copy_message(**kwargs):
+        copied.append(kwargs)
+
+    message = SimpleNamespace(id=88, copy=copy_message)
+
+    await service._copy_message(
+        FakeClient(),
+        -100111,
+        "@target",
+        message,
+    )
+
+    assert copied == [{"chat_id": "@target"}]
+
+
+@pytest.mark.asyncio
+async def test_copy_message_reports_forwarding_restriction(tmp_path: Path):
+    service, _ = _service(tmp_path)
+
+    async def copy_message(**kwargs):
+        raise ChatForwardsRestricted(
+            value=None,
+            rpc_name="messages.SendMedia",
+        )
+
+    message = SimpleNamespace(id=89, copy=copy_message)
+
+    with pytest.raises(ValueError, match="禁止转发/保存"):
+        await service._copy_message(
+            SimpleNamespace(),
+            -100111,
+            "@target",
+            message,
+        )
 
 
 @pytest.mark.asyncio
