@@ -327,6 +327,9 @@ def test_static_assets_and_authenticated_pages_render(client: TestClient):
     assert "typeof player.play === 'function'" in app_js
     assert "openVideo" in app_js
     assert "openImage" in app_js
+    assert "pendingControllers" in app_js
+    assert "abortPendingRequests" in app_js
+    assert "window.addEventListener('pagehide', abortPendingRequests)" in app_js
     assert 'id="sync-state"' in chats_page.text
     assert "initialDialogCache" in chats_page.text
     assert "localStorage" not in chats_page.text
@@ -405,6 +408,9 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     assert 'id="history-page-jump"' in dashboard.text
     assert 'data-history-status="success"' in dashboard.text
     assert 'data-history-status="failed"' in dashboard.text
+    assert "window.addEventListener('pagehide'" in dashboard.text
+    assert "source.close()" in dashboard.text
+    assert "window.addEventListener('pageshow'" in dashboard.text
     assert "下载监控" in dashboard.text
     assert "data-play-media" in dashboard.text
     assert "data-preview-image" in dashboard.text

@@ -1,5 +1,6 @@
 (() => {
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+  const pendingControllers = new Set();
   let toastTimer = null;
 
   function escapeHtml(value) {
@@ -12,8 +13,15 @@
     const method = (options.method || 'GET').toUpperCase();
     const headers = new Headers(options.headers || {});
     const timeoutMs = Number(options.timeoutMs || 0);
-    const controller = timeoutMs > 0 ? new AbortController() : null;
-    const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    const controller = new AbortController();
+    let timedOut = false;
+    pendingControllers.add(controller);
+    const timeoutId = timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, timeoutMs)
+      : null;
     let body = options.body;
     if (body !== undefined && body !== null && !(body instanceof FormData)) {
       headers.set('Content-Type', 'application/json');
@@ -29,7 +37,7 @@
         body,
         credentials: 'same-origin',
         cache: 'no-store',
-        signal: controller?.signal
+        signal: controller.signal
       });
       if (response.status === 401) {
         if (!['/login', '/setup'].includes(window.location.pathname)) window.location.href = '/login';
@@ -46,11 +54,19 @@
       }
       return payload;
     } catch (error) {
-      if (error?.name === 'AbortError') throw new Error('请求超时，请稍后重试');
+      if (error?.name === 'AbortError' && timedOut) {
+        throw new Error('请求超时，请稍后重试');
+      }
       throw error;
     } finally {
       if (timeoutId !== null) clearTimeout(timeoutId);
+      pendingControllers.delete(controller);
     }
+  }
+
+  function abortPendingRequests() {
+    for (const controller of pendingControllers) controller.abort();
+    pendingControllers.clear();
   }
 
   function toast(message, type = 'info') {
@@ -140,5 +156,29 @@
     });
   }
 
-  window.TMD = { api, escape: escapeHtml, toast, openVideo, openImage, closeVideo };
+  document.addEventListener('click', (event) => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const link = event.target.closest?.('a[href]');
+    if (!link || link.target === '_blank' || link.hasAttribute('download')) return;
+    const target = new URL(link.href, window.location.href);
+    if (target.origin !== window.location.origin) return;
+    if (
+      target.pathname === window.location.pathname &&
+      target.search === window.location.search
+    ) return;
+    abortPendingRequests();
+  }, true);
+
+  window.addEventListener('pagehide', abortPendingRequests);
+
+  window.TMD = {
+    api,
+    abortPendingRequests,
+    escape: escapeHtml,
+    toast,
+    openVideo,
+    openImage,
+    closeVideo
+  };
 })();

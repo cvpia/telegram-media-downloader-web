@@ -529,6 +529,16 @@ else window.addEventListener('load', bootDashboard, { once: true });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && source && source.readyState === EventSource.CLOSED) connectEvents();
 });
+window.addEventListener('pagehide', () => {
+  clearTimeout(reconnectTimer);
+  if (source) {
+    source.close();
+    source = null;
+  }
+});
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) connectEvents();
+});
 </script>
 
 {% endblock %}
