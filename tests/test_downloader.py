@@ -20,7 +20,7 @@ from app.downloader import (
     partial_download_path,
     resumable_download_offset,
 )
-from app.schemas import parse_date_bound
+from app.schemas import SettingsUpdate, parse_date_bound
 from app.telegram_manager import TelegramManager
 
 
@@ -79,6 +79,54 @@ def test_build_destination_does_not_escape_root(tmp_path: Path):
     )
     assert destination.resolve().is_relative_to(tmp_path.resolve())
     assert ".." not in destination.parts
+
+
+def test_build_destination_uses_video_caption_then_original_extension(tmp_path: Path):
+    message = SimpleNamespace(
+        id=43,
+        date=datetime(2025, 3, 9, 12, 30, tzinfo=UTC),
+        caption="第 43 期 - 频道更新",
+        text="",
+    )
+    media = SimpleNamespace(mime_type="video/mp4")
+
+    destination = build_destination(
+        tmp_path,
+        ["media_type"],
+        "{message_id} - {file_name}",
+        "Demo",
+        "video",
+        message,
+        "original-video.webm",
+    )
+
+    assert destination.name == "43 - 第 43 期 - 频道更新.webm"
+
+
+def test_build_destination_uses_caption_placeholder(tmp_path: Path):
+    message = SimpleNamespace(
+        id=44,
+        date=datetime(2025, 3, 9, 12, 30, tzinfo=UTC),
+        caption="频道文字标题",
+        text="",
+    )
+
+    destination = build_destination(
+        tmp_path,
+        [],
+        "{caption}",
+        "Demo",
+        "video",
+        message,
+        "fallback.mp4",
+    )
+
+    assert destination.name == "频道文字标题.mp4"
+
+
+def test_filename_template_accepts_caption_placeholder():
+    payload = SettingsUpdate(filename_template="{caption}")
+    assert payload.filename_template == "{caption}"
 
 
 def test_parse_date_bound_is_utc_aware():
@@ -474,6 +522,27 @@ def test_build_group_destination_uses_chat_folder_and_original_name(tmp_path: Pa
     )
     assert destination.parent == tmp_path / "Demo_ Channel"
     assert destination.name == "movie.mp4"
+
+
+def test_build_group_destination_uses_video_caption(tmp_path: Path):
+    message = SimpleNamespace(
+        id=13,
+        date=datetime(2025, 1, 1, tzinfo=UTC),
+        caption="频道视频标题",
+        text="",
+    )
+    media = SimpleNamespace(mime_type="video/mp4")
+
+    destination = build_group_destination(
+        tmp_path,
+        "Demo Channel",
+        "video",
+        message,
+        "movie.mp4",
+    )
+
+    assert destination.parent == tmp_path / "Demo Channel"
+    assert destination.name == "频道视频标题.mp4"
 
 
 def test_downloader_history_page_uses_offset_and_total(tmp_path: Path):

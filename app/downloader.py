@@ -84,6 +84,28 @@ def media_extension(media_type: str, media: Any, file_name: str | None) -> str:
     }.get(media_type, ".bin")
 
 
+def message_caption(message: Any) -> str:
+    """Return the visible message text used for media naming."""
+    return str(
+        getattr(message, "caption", None)
+        or getattr(message, "text", None)
+        or ""
+    ).strip()
+
+
+def media_name_stem(media_type: str, message: Any, file_name: str | None) -> str:
+    """Prefer the channel message text for videos, then the original file name."""
+    original_name = file_name or f"{media_type}_{getattr(message, 'id', 'file')}"
+    original_stem = Path(original_name).stem or (
+        f"{media_type}_{getattr(message, 'id', 'file')}"
+    )
+    if media_type == "video":
+        caption = message_caption(message)
+        if caption:
+            return caption
+    return original_stem
+
+
 def format_is_allowed(
     media_type: str,
     extension: str,
@@ -161,12 +183,13 @@ def build_destination(
         else:
             parts.append(date_values[part])
 
-    original_name = file_name or f"{media_type}_{message.id}"
-    stem = Path(original_name).stem or f"{media_type}_{message.id}"
+    stem = media_name_stem(media_type, message, file_name)
+    caption = message_caption(message) or stem
     extension = media_extension(media_type, message, file_name)
     rendered = filename_template.format(
         message_id=message.id,
         file_name=stem,
+        caption=caption,
         media_type=media_type,
         date=message_date.strftime("%Y%m%d_%H%M%S"),
     )
@@ -182,9 +205,7 @@ def build_group_destination(
     file_name: str | None,
 ) -> Path:
     extension = media_extension(media_type, message, file_name)
-    original_name = file_name or f"{media_type}_{message.id}{extension}"
-    original_path = Path(original_name)
-    stem = original_path.stem or f"{media_type}_{message.id}"
+    stem = media_name_stem(media_type, message, file_name)
     clean_name = sanitize_component(
         f"{stem}{extension}", fallback=f"{getattr(message, 'id', 'file')}{extension}"
     )

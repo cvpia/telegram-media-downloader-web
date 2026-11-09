@@ -12,7 +12,13 @@ from app.download_filter import validate_download_filter
 
 MEDIA_TYPES = ("audio", "document", "photo", "video", "voice", "video_note", "animation")
 FOLDER_PARTS = ("chat_title", "media_type", "year", "month", "date")
-FILENAME_PLACEHOLDERS = ("{message_id}", "{file_name}", "{media_type}", "{date}")
+FILENAME_PLACEHOLDERS = (
+    "{message_id}",
+    "{file_name}",
+    "{caption}",
+    "{media_type}",
+    "{date}",
+)
 YEAR_MONTH_RE = r"^\d{4}-\d{2}$"
 
 

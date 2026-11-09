@@ -39,7 +39,7 @@
     <fieldset><legend>媒体类型</legend><div class="check-grid" id="media-type-grid"></div></fieldset>
     <fieldset><legend>目录结构</legend><div class="check-grid" id="folder-part-grid"></div></fieldset>
     <div class="form-grid">
-      <label><span>文件名模板</span><input id="filename-template" type="text" required><small>可用占位符：{message_id}、{file_name}、{media_type}、{date}</small></label>
+      <label><span>文件名模板</span><input id="filename-template" type="text" required><small>可用占位符：{message_id}、{file_name}、{caption}、{media_type}、{date}。视频有文字时 {file_name} 自动使用消息文字，否则使用原文件名。</small></label>
       <label><span>最大并发下载数</span><input id="max-concurrent" type="number" min="1" max="10" required><small>保存后立即生效；遇到 Telegram 限流时会自动降到安全速度并逐步恢复</small></label>
     </div>
     <div class="form-grid three">
