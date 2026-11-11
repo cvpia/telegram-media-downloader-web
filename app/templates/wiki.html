@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#080c18">
+  <meta name="description" content="{{ app_name }} Wiki：Docker 部署、配置向导、数据持久化、反向代理、安全与备份指南。">
+  <title>Wiki · {{ app_name }}</title>
+  <link rel="icon" href="/static/favicon.svg?v={{ app_version }}" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/wiki.css?v={{ app_version }}">
+</head>
+<body>
+  <header class="docs-header">
+    <a class="docs-brand" href="/" aria-label="返回产品官网">
+      <span class="docs-logo">T⌁</span>
+      <span><strong>TELEVAULT</strong><small>DOCUMENTATION</small></span>
+    </a>
+    <div class="docs-header-links">
+      <a href="/">官网</a>
+      <a href="/dashboard">工作台</a>
+      <a class="github-link" href="https://github.com/cvpia/telegram-media-downloader-web" target="_blank" rel="noreferrer">GitHub ↗</a>
+    </div>
+    <button class="docs-menu-button" id="docs-menu-button" type="button" aria-label="打开文档导航" aria-expanded="false">
+      <span></span><span></span>
+    </button>
+  </header>
+
+  <div class="docs-shell">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <div class="docs-version"><i></i> Wiki · v{{ app_version }}</div>
+      <nav aria-label="Wiki 导航">
+        <p>开始使用</p>
+        <a class="active" href="#overview">概览</a>
+        <a href="#quick-start">快速开始</a>
+        <a href="#requirements">环境要求</a>
+        <p>部署</p>
+        <a href="#docker-compose">Docker Compose</a>
+        <a href="#docker-image">预构建镜像</a>
+        <a href="#native-install">Python 原生运行</a>
+        <a href="#reverse-proxy">反向代理与 HTTPS</a>
+        <p>运维</p>
+        <a href="#configuration">首次配置</a>
+        <a href="#persistence">数据持久化</a>
+        <a href="#upgrade">更新与回滚</a>
+        <a href="#security">安全与备份</a>
+        <p>帮助</p>
+        <a href="#troubleshooting">故障排查</a>
+        <a href="#resources">相关资源</a>
+      </nav>
+      <a class="sidebar-github" href="https://github.com/cvpia/telegram-media-downloader-web" target="_blank" rel="noreferrer">
+        <span>官方 GitHub</span>
+        <code>cvpia/telegram-media-downloader-web</code>
+        <b>打开仓库 ↗</b>
+      </a>
+    </aside>
+
+    <main class="docs-content">
+      <section class="docs-hero" id="overview">
+        <div class="docs-kicker">DEPLOY / CONFIGURE / OPERATE</div>
+        <h1>部署与使用文档</h1>
+        <p>从一台新服务器开始，到 Telegram 登录、下载配置与长期维护。本文档覆盖 Docker、原生运行、反向代理、备份和安全基线。</p>
+        <div class="docs-hero-meta">
+          <span><i></i> SELF HOSTED</span>
+          <span>MIT LICENSE</span>
+          <span>v{{ app_version }}</span>
+        </div>
+        <div class="docs-callout">
+          <strong>推荐路径</strong>
+          <p>大多数用户应选择 Docker Compose。它已固定 <code>data</code> 与 <code>downloads</code> 两个持久化目录，并能避免升级时丢失登录会话与下载文件。</p>
+        </div>
+      </section>
+
+      <section class="docs-section" id="quick-start">
+        <div class="docs-section-label">QUICK START</div>
+        <h2>5 分钟快速开始</h2>
+        <p>安装 Docker 后，克隆官方仓库并启动服务。首次配置和 Telegram 登录都在浏览器内完成。</p>
+        <ol class="docs-steps">
+          <li><span>01</span><div><strong>克隆仓库</strong><p>确保当前目录为空，或选择一个新的部署目录。</p></div></li>
+          <li><span>02</span><div><strong>启动 Compose</strong><p>首次启动会自动构建镜像；后续启动无需再次构建。</p></div></li>
+          <li><span>03</span><div><strong>打开工作台</strong><p>访问 <code>http://服务器IP:8000/dashboard</code>，按向导完成配置。</p></div></li>
+        </ol>
+        <div class="code-block">
+          <div class="code-head"><span>bash · quick start</span><button class="copy-button" type="button" data-copy-target="quick-command">复制命令</button></div>
+          <pre><code id="quick-command">git clone https://github.com/cvpia/telegram-media-downloader-web.git
+cd telegram-media-downloader-web
+docker compose up -d --build</code></pre>
+        </div>
+      </section>
+
+      <section class="docs-section" id="requirements">
+        <div class="docs-section-label">REQUIREMENTS</div>
+        <h2>环境要求</h2>
+        <div class="docs-grid">
+          <article><span>Docker</span><strong>Engine 24+</strong><p>需要 Compose v2，建议使用官方 Docker 安装方式。</p></article>
+          <article><span>系统资源</span><strong>2 CPU / 1 GB</strong><p>建议至少 2 GB 可用磁盘；媒体文件较大时应预留更多空间。</p></article>
+          <article><span>系统</span><strong>Linux / Windows</strong><p>也可在支持 Docker 的 NAS 或其他宿主机上运行。</p></article>
+        </div>
+        <div class="docs-note"><strong>端口</strong> 默认映射宿主机的 <code>8000</code> 端口。若被占用，请修改 <code>docker-compose.yml</code> 的端口映射。</div>
+      </section>
+
+      <section class="docs-section" id="docker-compose">
+        <div class="docs-section-label">RECOMMENDED</div>
+        <h2>Docker Compose 部署</h2>
+        <p>官方 <code>docker-compose.yml</code> 会设置持久化挂载，并在容器内未挂载 <code>/data</code> 或 <code>/downloads</code> 时拒绝启动，防止配置落进临时容器层。</p>
+        <div class="code-block">
+          <div class="code-head"><span>bash · compose</span><button class="copy-button" type="button" data-copy-target="compose-command">复制命令</button></div>
+          <pre><code id="compose-command">git clone https://github.com/cvpia/telegram-media-downloader-web.git
+cd telegram-media-downloader-web
+docker compose up -d --build
+docker compose ps</code></pre>
+        </div>
+        <div class="docs-two-column">
+          <div><h3>启动后检查</h3><p>健康检查通过后，访问 <code>/health</code> 应返回 <code>{"status":"ok"}</code>。然后打开 <code>/dashboard</code> 完成配置。</p></div>
+          <div><h3>查看日志</h3><p>使用 <code>docker compose logs -f --tail=100</code> 查看启动和 Telegram 连接日志，不要公开分享包含登录信息的完整日志。</p></div>
+        </div>
+      </section>
+
+      <section class="docs-section" id="docker-image">
+        <div class="docs-section-label">PREBUILT IMAGE</div>
+        <h2>使用预构建镜像</h2>
+        <p>如果不希望本地构建，可直接拉取 Docker Hub 镜像。数据库、密钥和会话仍必须通过卷挂载持久化。</p>
+        <div class="code-block">
+          <div class="code-head"><span>bash · docker hub</span><button class="copy-button" type="button" data-copy-target="image-command">复制命令</button></div>
+          <pre><code id="image-command">docker pull xxoo520zls/telegram-media-downloader-web:3.13.1
+docker compose up -d</code></pre>
+        </div>
+        <p class="docs-muted">Compose 配置中的 <code>image</code> 字段会同步标记本地构建结果，因此源码构建和镜像部署可以共用同一份配置。</p>
+      </section>
+
+      <section class="docs-section" id="native-install">
+        <div class="docs-section-label">ALTERNATIVE</div>
+        <h2>Python 原生运行</h2>
+        <p>需要 Python 3.12 或 3.13。TgCrypto 可提升 Telegram 媒体传输效率；Windows 与 Linux 均支持。</p>
+        <div class="code-block">
+          <div class="code-head"><span>bash · native</span><button class="copy-button" type="button" data-copy-target="native-command">复制命令</button></div>
+          <pre><code id="native-command">python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
+        </div>
+      </section>
+
+      <section class="docs-section" id="reverse-proxy">
+        <div class="docs-section-label">PRODUCTION</div>
+        <h2>反向代理与 HTTPS</h2>
+        <p>应用默认使用 HTTP。把服务暴露到公网前，应在 Nginx、Caddy 或云负载均衡层启用 HTTPS，并限制后台访问来源。</p>
+        <div class="code-block">
+          <div class="code-head"><span>nginx · server block</span><button class="copy-button" type="button" data-copy-target="nginx-command">复制配置</button></div>
+          <pre><code id="nginx-command">server {
+    listen 443 ssl http2;
+    server_name media.example.com;
+
+    client_max_body_size 1024m;
+    proxy_read_timeout 3600s;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}</code></pre>
+        </div>
+        <div class="docs-callout warning"><strong>SSE 与长时间请求</strong><p>下载监控依赖 Server-Sent Events。代理层请关闭响应缓冲并设置足够长的读取超时。</p></div>
+      </section>
+
+      <section class="docs-section" id="configuration">
+        <div class="docs-section-label">FIRST RUN</div>
+        <h2>首次配置</h2>
+        <ol class="docs-steps">
+          <li><span>01</span><div><strong>网络代理</strong><p>按实际网络环境配置 HTTP 或 SOCKS 代理，并通过连接测试后再继续。</p></div></li>
+          <li><span>02</span><div><strong>管理员密码</strong><p>使用强密码保护管理后台。密码以 scrypt 哈希保存。</p></div></li>
+          <li><span>03</span><div><strong>Telegram API</strong><p>填写 API ID 与 API Hash。敏感信息会使用本地密钥加密。</p></div></li>
+          <li><span>04</span><div><strong>Telegram 登录</strong><p>输入手机号、验证码和两步验证密码，完成用户会话登录。</p></div></li>
+          <li><span>05</span><div><strong>下载偏好</strong><p>设置媒体类型、目录结构、文件名模板和最大并发数。</p></div></li>
+        </ol>
+      </section>
+
+      <section class="docs-section" id="persistence">
+        <div class="docs-section-label">DATA</div>
+        <h2>数据持久化</h2>
+        <p>以下两个目录必须保留。重建容器时如果未挂载它们，配置、密钥、Telegram 会话和媒体文件都可能丢失。</p>
+        <div class="docs-grid">
+          <article><span><code>./data</code></span><strong>应用数据</strong><p>SQLite、加密密钥、Telegram 会话、日志和数据库备份。</p></article>
+          <article><span><code>./downloads</code></span><strong>媒体文件</strong><p>按频道、日期和媒体类型组织的下载内容。</p></article>
+          <article><span><code>./data/.secret.key</code></span><strong>加密密钥</strong><p>丢失后无法解密已保存的 API Hash、Bot Token 和代理密码。</p></article>
+        </div>
+      </section>
+
+      <section class="docs-section" id="upgrade">
+        <div class="docs-section-label">MAINTENANCE</div>
+        <h2>更新与回滚</h2>
+        <div class="code-block">
+          <div class="code-head"><span>bash · update</span><button class="copy-button" type="button" data-copy-target="update-command">复制命令</button></div>
+          <pre><code id="update-command">git pull
+docker compose pull
+docker compose up -d
+docker compose logs -f --tail=100</code></pre>
+        </div>
+        <p class="docs-note">不要在更新前执行 <code>docker compose down -v</code>。该命令会删除数据卷，且可能造成不可恢复的数据丢失。</p>
+      </section>
+
+      <section class="docs-section" id="security">
+        <div class="docs-section-label">SECURITY</div>
+        <h2>安全与备份</h2>
+        <div class="docs-two-column">
+          <div><h3>定期备份</h3><p>备份整个 <code>data/</code> 目录，尤其是 <code>app.db</code>、<code>.secret.key</code> 与 Telegram 会话文件。先停止服务再复制可避免数据库写入竞争。</p></div>
+          <div><h3>最小暴露面</h3><p>只开放反向代理端口；不要将 Telegram 会话文件、API Hash、Bot Token 或日志提交到 Git 仓库。</p></div>
+        </div>
+        <div class="code-block">
+          <div class="code-head"><span>bash · backup</span><button class="copy-button" type="button" data-copy-target="backup-command">复制命令</button></div>
+          <pre><code id="backup-command">docker compose stop
+tar -czf telegram-media-backup-$(date +%F).tar.gz data downloads
+docker compose start</code></pre>
+        </div>
+      </section>
+
+      <section class="docs-section" id="troubleshooting">
+        <div class="docs-section-label">TROUBLESHOOTING</div>
+        <h2>故障排查</h2>
+        <details open>
+          <summary>容器启动后立即退出</summary>
+          <p>检查 <code>docker compose logs</code>。Compose 在 <code>/data</code> 或 <code>/downloads</code> 未正确挂载时会主动拒绝启动。</p>
+        </details>
+        <details>
+          <summary>无法连接 Telegram</summary>
+          <p>先确认宿主机的网络与代理设置，再回到配置向导重新测试代理。不要直接修改数据库中的加密凭据。</p>
+        </details>
+        <details>
+          <summary>下载任务频繁失败</summary>
+          <p>检查磁盘空间、Telegram 账号状态和日志中的重试原因。系统会指数退避并在队列结束后优先重试失败资源。</p>
+        </details>
+        <details>
+          <summary>反向代理后 SSE 不再更新</summary>
+          <p>关闭代理响应缓冲，延长读取超时，并确保 <code>X-Accel-Buffering: no</code> 等流式响应头未被覆盖。</p>
+        </details>
+      </section>
+
+      <section class="docs-section resources-section" id="resources">
+        <div class="docs-section-label">RESOURCES</div>
+        <h2>相关资源</h2>
+        <div class="resource-grid">
+          <a href="https://github.com/cvpia/telegram-media-downloader-web" target="_blank" rel="noreferrer"><span>官方仓库</span><strong>cvpia/telegram-media-downloader-web ↗</strong></a>
+          <a href="https://github.com/cvpia/telegram-media-downloader-web/releases" target="_blank" rel="noreferrer"><span>版本记录</span><strong>GitHub Releases ↗</strong></a>
+          <a href="/api/docs" target="_blank"><span>接口文档</span><strong>FastAPI OpenAPI ↗</strong></a>
+          <a href="/dashboard"><span>开始使用</span><strong>进入下载工作台 →</strong></a>
+        </div>
+      </section>
+
+      <footer class="docs-footer">
+        <span>{{ app_name }} · Wiki v{{ app_version }}</span>
+        <span><a href="/">返回官网</a> · <a href="https://github.com/cvpia/telegram-media-downloader-web" target="_blank" rel="noreferrer">官方 GitHub</a></span>
+      </footer>
+    </main>
+  </div>
+
+  <script src="/static/wiki.js?v={{ app_version }}"></script>
+</body>
+</html>

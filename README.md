@@ -2,7 +2,7 @@
 
 基于 FastAPI 重写的 Telegram 媒体下载器。目标是把原项目需要手工编辑 YAML、进入终端完成首次登录的流程，改成浏览器内一次完成。
 
-当前版本：**3.12.1**
+当前版本：**3.13.1**
 
 ## 功能
 - `/` 提供沉浸式产品官网，后台下载监控位于 `/dashboard`
@@ -94,14 +94,24 @@ message_date >= 2025.01.01 and media_type == r'(video|audio)'
 - React 交互与 WebGL 场景：`app/static/landing.js`
 - 真实产品截图：`app/static/landing/`
 
-官网使用 `registry.npmmirror.com` 浏览器构建，直接由 FastAPI 提供，不需要 npm、Node.js 或额外打包步骤。
+官网使用 \`registry.npmmirror.com\` 浏览器构建，直接由 FastAPI 提供，不需要 npm、Node.js 或额外打包步骤。
+
+官方仓库：https://github.com/cvpia/telegram-media-downloader-web
+
+## Wiki 与文档
+
+- 站内部署 Wiki：\`/wiki\`
+- Wiki 源文档：\`docs/wiki/\`
+- 官网部署方案：\`/\` 的「部署方案」区块
+
+\`docs/wiki/\` 中的 Markdown 可直接同步到 GitHub Wiki。当前仓库尚未初始化 GitHub Wiki，站内 \`/wiki\` 无需额外配置即可访问。
 
 ## Docker 启动
 
 Docker Hub 镜像：
 
 ```bash
-docker pull xxoo520zls/telegram-media-downloader-web:3.12.1
+docker pull xxoo520zls/telegram-media-downloader-web:3.13.1
 ```
 
 也可以直接使用 Compose 构建并启动（配置中的 `image` 会同步标记本地构建结果）：
@@ -148,7 +158,7 @@ docker run -d \
   -v "$PWD/data:/data" \
   -v "$PWD/downloads:/downloads" \
   --restart unless-stopped \
-  xxoo520zls/telegram-media-downloader-web:3.12.1
+  xxoo520zls/telegram-media-downloader-web:3.13.1
 ```
 
 ## 本地开发

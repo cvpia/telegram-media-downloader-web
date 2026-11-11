@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from app.version import APP_VERSION
@@ -43,10 +45,51 @@ def test_public_landing_page_renders_before_setup(client: TestClient):
     assert "window.Motion" in js_response.text
     assert "screenshot-grid" in js_response.text
     assert "appVersion" in js_response.text
+    assert "deploy-section" in js_response.text
+    assert "copy-button" in js_response.text
+    assert "https://github.com/cvpia/telegram-media-downloader-web" in js_response.text
+    assert "deploy-section" in js_response.text
+    assert "copy-button" in js_response.text
+    assert "https://github.com/cvpia/telegram-media-downloader-web" in js_response.text
     assert client.get("/static/landing/monitor.png").status_code == 200
     dashboard_response = client.get("/dashboard", follow_redirects=False)
     assert dashboard_response.status_code == 303
     assert dashboard_response.headers["location"] == "/setup"
+
+
+def test_wiki_page_and_deployment_docs(client: TestClient):
+    response = client.get("/wiki", follow_redirects=False)
+    assert response.status_code == 200, response.text
+    assert f"Wiki · v{APP_VERSION}" in response.text
+    assert f"/static/wiki.css?v={APP_VERSION}" in response.text
+    assert f"/static/wiki.js?v={APP_VERSION}" in response.text
+    assert 'id="quick-start"' in response.text
+    assert 'id="docker-compose"' in response.text
+    assert "docker compose up -d --build" in response.text
+    assert "https://github.com/cvpia/telegram-media-downloader-web" in response.text
+    assert "反向代理与 HTTPS" in response.text
+    assert "数据持久化" in response.text
+
+    css_response = client.get(f"/static/wiki.css?v={APP_VERSION}")
+    assert css_response.status_code == 200
+    assert "docs-sidebar" in css_response.text
+    assert "@media (max-width: 760px)" in css_response.text
+
+    js_response = client.get(f"/static/wiki.js?v={APP_VERSION}")
+    assert js_response.status_code == 200
+    assert "navigator.clipboard.writeText" in js_response.text
+    assert "docs-menu-button" in js_response.text
+
+    wiki_dir = Path(__file__).resolve().parents[1] / "docs" / "wiki"
+    expected_pages = {
+        "Home.md": "官方仓库",
+        "Deployment.md": "docker compose up -d --build",
+        "Configuration.md": "Telegram 登录",
+        "Operations-and-Security.md": "docker compose down -v",
+    }
+    for filename, expected in expected_pages.items():
+        content = (wiki_dir / filename).read_text(encoding="utf-8")
+        assert expected in content
 
 
 def test_setup_page_renders_version_and_csrf(client: TestClient):

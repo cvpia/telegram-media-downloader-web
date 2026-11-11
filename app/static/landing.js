@@ -3,7 +3,7 @@
 
   const { useEffect, useRef, useState } = React;
   const { AnimatePresence, motion } = window.Motion || {};
-  const appVersion = document.querySelector('meta[name="app-version"]')?.content || "3.12.1";
+  const appVersion = document.querySelector('meta[name="app-version"]')?.content || "3.13.1";
   const asset = (path) => path + "?v=" + encodeURIComponent(appVersion);
 
   const screenshots = [
@@ -87,6 +87,8 @@
     { href: "#product", label: "产品能力" },
     { href: "#network", label: "数据网络" },
     { href: "#interface", label: "真实界面" },
+    { href: "#deploy", label: "部署方案" },
+    { href: "/wiki", label: "Wiki" },
     { href: "#faq", label: "常见问题" },
   ];
 
@@ -99,6 +101,9 @@
     spark: <><path d="m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z" /><path d="m5 16 .8 2.2L8 19l-2.2.8L5 22l-.8-2.2L2 19l2.2-.8L5 16Z" /></>,
     arrow: <><path d="M5 12h14m-5-5 5 5-5 5" /></>,
     external: <><path d="M14 4h6v6M20 4 10 14" /><path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4" /></>,
+    github: <><path d="M15 22v-3.6c.04-1.05-.37-2.07-1.13-2.8 3.68-.41 7.55-1.81 7.55-8.18A6.4 6.4 0 0 0 19.71 2.9 5.95 5.95 0 0 0 19.56-.02S18.23-.44 15 1.57a16.2 16.2 0 0 0-8.5 0C3.27-.44 1.94-.02 1.94-.02a5.95 5.95 0 0 0-.15 2.92A6.4 6.4 0 0 0 0 7.42c0 6.33 3.87 7.73 7.55 8.18A3.68 3.68 0 0 0 6.4 18.4V22" /><path d="M6.4 19.2C2.8 20.28 2 17.9 2 17.9" /></>,
+    copy: <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></>,
+    check: <><path d="m5 12 4 4L19 6" /></>,
   };
 
   function Icon({ name, className = "" }) {
@@ -926,6 +931,148 @@
     );
   }
 
+
+  function CopyButton({ text, label = "复制" }) {
+    const [copied, setCopied] = useState(false);
+
+    const copy = async () => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+    };
+
+    return (
+      <button className="copy-button" type="button" onClick={copy} aria-label={copied ? "已复制" : label}>
+        <Icon name={copied ? "check" : "copy"} />
+        <span>{copied ? "已复制" : label}</span>
+      </button>
+    );
+  }
+
+  function DeploymentCode({ eyebrow, title, code }) {
+    return (
+      <article className="deploy-code-card">
+        <div className="deploy-code-head">
+          <span><i />{eyebrow}</span>
+          <CopyButton text={code} label="复制命令" />
+        </div>
+        <h3>{title}</h3>
+        <pre><code>{code}</code></pre>
+      </article>
+    );
+  }
+
+  function Deployment() {
+    const repoUrl = "https://github.com/cvpia/telegram-media-downloader-web";
+    const composeCode = "git clone https://github.com/cvpia/telegram-media-downloader-web.git\ncd telegram-media-downloader-web\ndocker compose up -d --build";
+    const imageCode = "docker pull xxoo520zls/telegram-media-downloader-web:3.13.1\ndocker compose up -d";
+
+    return (
+      <section className="section deploy-section" id="deploy">
+        <div className="container">
+          <motion.div
+            className="section-heading deploy-heading"
+            initial={{ opacity: 0, y: 28 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, amount: 0.35 }}
+            transition={{ duration: 0.85, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <div className="section-kicker">Open source · deploy anywhere</div>
+            <h2>从 GitHub 到上线，<br />只需要几分钟。</h2>
+            <p>推荐 Docker Compose 部署，数据始终保留在你的服务器。下方命令可以直接复制，完整步骤与故障排查见 Wiki。</p>
+          </motion.div>
+
+          <div className="deploy-layout">
+            <motion.article
+              className="repo-card glass"
+              initial={{ opacity: 0, y: 32 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: 0.3 }}
+              transition={{ duration: 0.75, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <div className="repo-card-top">
+                <span className="repo-mark"><Icon name="github" /></span>
+                <span className="repo-badge"><i /> OFFICIAL REPOSITORY</span>
+              </div>
+              <h3>cvpia / telegram-media-downloader-web</h3>
+              <p>完整源代码、Dockerfile、Compose 配置、版本说明和问题追踪都位于 GitHub。任何人都可以自行部署与二次开发。</p>
+              <div className="repo-address">
+                <Icon name="github" />
+                <code>{repoUrl}</code>
+                <CopyButton text={repoUrl} />
+              </div>
+              <div className="repo-meta">
+                <span>MIT LICENSE</span>
+                <span>DOCKER READY</span>
+                <span>SELF HOSTED</span>
+              </div>
+              <div className="repo-actions">
+                <a className="button-primary" href={repoUrl} target="_blank" rel="noreferrer">打开 GitHub <Icon name="external" /></a>
+                <a className="button-secondary" href="/wiki">阅读 Wiki <Icon name="arrow" /></a>
+              </div>
+            </motion.article>
+
+            <motion.div
+              className="deploy-summary"
+              initial={{ opacity: 0, y: 32 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: 0.3 }}
+              transition={{ duration: 0.75, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <div className="deploy-requirement">
+                <span className="deploy-step">01</span>
+                <div><h3>准备一台服务器</h3><p>Docker Engine 24+、Compose v2，建议至少 2 核 CPU、1 GB 内存与 2 GB 可用磁盘。</p></div>
+              </div>
+              <div className="deploy-requirement">
+                <span className="deploy-step">02</span>
+                <div><h3>拉取并启动项目</h3><p>克隆仓库或直接拉取镜像。Compose 会创建固定数据目录并检查持久化挂载。</p></div>
+              </div>
+              <div className="deploy-requirement">
+                <span className="deploy-step">03</span>
+                <div><h3>完成浏览器配置</h3><p>访问服务器地址，在 <code>/dashboard</code> 完成代理、管理员、Telegram 登录与下载偏好。</p></div>
+              </div>
+              <div className="deploy-supported">
+                <span>支持部署方式</span>
+                <div><b>Docker</b><b>Compose</b><b>Python 3.12+</b><b>Linux / Windows</b></div>
+              </div>
+            </motion.div>
+          </div>
+
+          <div className="deploy-code-grid">
+            <DeploymentCode eyebrow="SOURCE BUILD · RECOMMENDED" title="从源码构建并启动" code={composeCode} />
+            <DeploymentCode eyebrow="PREBUILT IMAGE" title="使用已发布镜像" code={imageCode} />
+          </div>
+
+          <motion.div
+            className="deploy-links"
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.7 }}
+          >
+            <span><i /> 部署完成后访问 <code>http://服务器IP:8000</code></span>
+            <div>
+              <a href="/wiki#docker-compose">Docker 部署指南 <Icon name="arrow" /></a>
+              <a href="/wiki#security">安全与备份 <Icon name="arrow" /></a>
+              <a href={repoUrl + "/releases"} target="_blank" rel="noreferrer">Release Notes <Icon name="external" /></a>
+            </div>
+          </motion.div>
+        </div>
+      </section>
+    );
+  }
+
   function Showcase({ onOpen }) {
     return (
       <section className="section showcase" id="interface">
@@ -1031,7 +1178,7 @@
           >
             <div className="section-kicker">Answers</div>
             <h2>需要知道的，<br />都在这里。</h2>
-            <p>关于隐私、部署与下载机制的高频问题。如果还需要更多信息，可以查看 GitHub 上的完整文档。</p>
+            <p>关于隐私、部署与下载机制的高频问题。如果还需要更多信息，可以查看 <a href="/wiki">完整 Wiki 文档</a>。</p>
           </motion.div>
 
           <div className="faq-list">
@@ -1090,11 +1237,14 @@
               <a href="#product">核心能力</a>
               <a href="#network">数据网络</a>
               <a href="#interface">真实界面</a>
+              <a href="#deploy">部署方案</a>
+              <a href="/wiki">Wiki 文档</a>
             </div>
             <div className="footer-column">
               <h3>开始</h3>
               <a href="/dashboard">进入工作台</a>
               <a href="/setup">配置向导</a>
+              <a href="/wiki">部署文档</a>
               <a href="/api/docs">API 文档</a>
             </div>
             <div className="footer-column">
@@ -1128,7 +1278,7 @@
           <p>打开工作台，完成一次配置。之后，让内容自己流向该去的地方。</p>
           <div className="hero-actions">
             <a className="button-primary" href="/dashboard">立即开始 <Icon name="arrow" /></a>
-            <a className="button-secondary" href="https://github.com/cvpia/telegram-media-downloader-web" target="_blank" rel="noreferrer">查看 GitHub <Icon name="external" /></a>
+            <a className="button-secondary" href="/wiki">部署与 Wiki 文档 <Icon name="arrow" /></a>
           </div>
         </motion.div>
       </section>
@@ -1289,6 +1439,7 @@
           <TrustStrip />
           <Features />
           <NetworkSection />
+          <Deployment />
           <Showcase onOpen={setLightboxIndex} />
           <BentoSection />
           <FAQ />

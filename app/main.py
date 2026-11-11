@@ -870,6 +870,14 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
             context=page_context(request, page="landing"),
         )
 
+    @app.get("/wiki", response_class=HTMLResponse)
+    async def wiki_page(request: Request):
+        return templates.TemplateResponse(
+            request=request,
+            name="wiki.html",
+            context=page_context(request, page="wiki"),
+        )
+
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard_page(request: Request):
         services = service_container(request)
