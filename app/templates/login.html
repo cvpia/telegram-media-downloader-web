@@ -28,7 +28,7 @@ form.addEventListener('submit', async (event) => {
   button.disabled = true;
   try {
     await TMD.api('/api/auth/login', { method: 'POST', body: { password: document.getElementById('password').value } });
-    window.location.href = '/';
+    window.location.href = '/dashboard';
   } catch (err) {
     error.textContent = err.message;
     error.hidden = false;

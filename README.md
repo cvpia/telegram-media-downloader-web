@@ -2,11 +2,11 @@
 
 基于 FastAPI 重写的 Telegram 媒体下载器。目标是把原项目需要手工编辑 YAML、进入终端完成首次登录的流程，改成浏览器内一次完成。
 
-当前版本：**3.11.1**
+当前版本：**3.12.1**
 
 ## 功能
-
-- 首次访问自动进入配置向导
+- `/` 提供沉浸式产品官网，后台下载监控位于 `/dashboard`
+- 首次访问后台会自动进入配置向导
 - Web 端设置管理密码
 - Web 端填写 Telegram API ID / API Hash
 - 网络代理连接测试通过后才进入下一步
@@ -85,12 +85,23 @@ message_date >= 2025.01.01 and media_type == r'(video|audio)'
 
 规则采用安全解析器执行，不会运行任意 Python 代码。
 
+## 产品官网
+
+公开官网位于 `/`，后台工作台位于 `/dashboard`。
+
+- 页面入口：`app/templates/landing.html`
+- 视觉样式：`app/static/landing.css`
+- React 交互与 WebGL 场景：`app/static/landing.js`
+- 真实产品截图：`app/static/landing/`
+
+官网使用 `registry.npmmirror.com` 浏览器构建，直接由 FastAPI 提供，不需要 npm、Node.js 或额外打包步骤。
+
 ## Docker 启动
 
 Docker Hub 镜像：
 
 ```bash
-docker pull xxoo520zls/telegram-media-downloader-web:3.11.1
+docker pull xxoo520zls/telegram-media-downloader-web:3.12.1
 ```
 
 也可以直接使用 Compose 构建并启动（配置中的 `image` 会同步标记本地构建结果）：
@@ -105,7 +116,7 @@ docker compose up -d --build
 http://localhost:8000
 ```
 
-首次访问会进入配置向导。
+打开 `/` 查看产品官网；进入 `/dashboard` 后台后，首次使用会自动进入配置向导。
 
 数据目录：
 
@@ -137,7 +148,7 @@ docker run -d \
   -v "$PWD/data:/data" \
   -v "$PWD/downloads:/downloads" \
   --restart unless-stopped \
-  xxoo520zls/telegram-media-downloader-web:3.11.1
+  xxoo520zls/telegram-media-downloader-web:3.12.1
 ```
 
 ## 本地开发

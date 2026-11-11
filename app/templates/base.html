@@ -15,7 +15,7 @@
 <body class="page-{{ page }}" data-authenticated="{{ 'true' if authenticated else 'false' }}">
   {% if authenticated %}
   <header class="topbar">
-    <a class="brand" href="/">
+    <a class="brand" href="/dashboard">
       <span class="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" focusable="false"><path d="M12 4v13m0 0 5-5m-5 5-5-5"></path></svg>
       </span>
@@ -25,7 +25,7 @@
       </span>
     </a>
     <nav class="main-nav" aria-label="主导航">
-      <a href="/" class="{{ 'active' if page == 'dashboard' else '' }}">下载监控</a>
+      <a href="/dashboard" class="{{ 'active' if page == 'dashboard' else '' }}">下载监控</a>
       <a href="/chats" class="{{ 'active' if page == 'chats' else '' }}">频道管理</a>
       <a href="/forwarding" class="{{ 'active' if page == 'forwarding' else '' }}">消息转发</a>
       <a href="/setup?edit=1" class="{{ 'active' if page == 'setup' else '' }}">配置向导</a>

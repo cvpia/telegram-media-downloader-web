@@ -863,7 +863,15 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         )
 
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request):
+    async def landing_page(request: Request):
+        return templates.TemplateResponse(
+            request=request,
+            name="landing.html",
+            context=page_context(request, page="landing"),
+        )
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard_page(request: Request):
         services = service_container(request)
         if not services.settings.admin_configured:
             return RedirectResponse("/setup", status_code=303)
@@ -890,7 +898,7 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         if services.settings.admin_configured and not request.session.get("authenticated"):
             return RedirectResponse("/login", status_code=303)
         if services.settings.ready and not edit_mode:
-            return RedirectResponse("/", status_code=303)
+            return RedirectResponse("/dashboard", status_code=303)
         return templates.TemplateResponse(
             request=request,
             name="setup.html",
@@ -910,7 +918,7 @@ def create_app(runtime: RuntimeConfig | None = None) -> FastAPI:
         if not services.settings.admin_configured:
             return RedirectResponse("/setup", status_code=303)
         if request.session.get("authenticated"):
-            target = "/" if services.settings.ready else "/setup"
+            target = "/dashboard" if services.settings.ready else "/setup"
             return RedirectResponse(target, status_code=303)
         return templates.TemplateResponse(
             request=request,

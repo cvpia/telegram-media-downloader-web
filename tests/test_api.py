@@ -13,10 +13,40 @@ def test_health_and_version(client: TestClient):
     assert payload["name"] == "Telegram Media Downloader"
 
 
-def test_root_redirects_to_setup_on_first_run(client: TestClient):
+def test_public_landing_page_renders_before_setup(client: TestClient):
     response = client.get("/", follow_redirects=False)
-    assert response.status_code == 303
-    assert response.headers["location"] == "/setup"
+    assert response.status_code == 200, response.text
+    assert f'name="app-version" content="{APP_VERSION}"' in response.text
+    assert f"/static/landing.css?v={APP_VERSION}" in response.text
+    assert f"/static/landing.js?v={APP_VERSION}" in response.text
+    assert 'https://registry.npmmirror.com/react/18.3.1/' in response.text
+    assert 'https://registry.npmmirror.com/three/0.160.0/' in response.text
+    assert 'https://registry.npmmirror.com/gsap/3.12.5/' in response.text
+    assert 'https://registry.npmmirror.com/framer-motion/6.5.1/' in response.text
+    assert 'id="root"' in response.text
+    assert "把 Telegram" in response.text
+    assert "TeleVault" in response.text
+
+    css_response = client.get(f"/static/landing.css?v={APP_VERSION}")
+    assert css_response.status_code == 200
+    assert css_response.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert "hero-canvas" in css_response.text
+    assert "@media (max-width: 620px)" in css_response.text
+    assert "width: 16px;" in css_response.text
+
+    js_response = client.get(f"/static/landing.js?v={APP_VERSION}")
+    assert js_response.status_code == 200
+    assert "new THREE.WebGLRenderer" in js_response.text
+    assert "targetFps" in js_response.text
+    assert "IntersectionObserver" in js_response.text
+    assert "window.gsap" in js_response.text
+    assert "window.Motion" in js_response.text
+    assert "screenshot-grid" in js_response.text
+    assert "appVersion" in js_response.text
+    assert client.get("/static/landing/monitor.png").status_code == 200
+    dashboard_response = client.get("/dashboard", follow_redirects=False)
+    assert dashboard_response.status_code == 303
+    assert dashboard_response.headers["location"] == "/setup"
 
 
 def test_setup_page_renders_version_and_csrf(client: TestClient):
@@ -279,7 +309,7 @@ def test_retry_failed_download_action(client: TestClient, monkeypatch):
 
 def test_authenticated_incomplete_setup_can_open_monitor(client: TestClient):
     initialize_admin(client)
-    response = client.get("/")
+    response = client.get("/dashboard")
     assert response.status_code == 200
     assert "下载监控" in response.text
     assert "配置尚未完成" in response.text
@@ -385,7 +415,7 @@ def test_dashboard_monitoring_page_and_edit_wizard(client: TestClient, monkeypat
     services = client.app.state.services
     monkeypatch.setattr(type(services.settings), "ready", property(lambda _: True))
 
-    dashboard = client.get("/", headers={"Accept-Encoding": "gzip"})
+    dashboard = client.get("/dashboard", headers={"Accept-Encoding": "gzip"})
     assert dashboard.status_code == 200, dashboard.text
     assert dashboard.headers["content-encoding"] == "gzip"
     assert f"/static/favicon.svg?v={APP_VERSION}" in dashboard.text

@@ -3,7 +3,7 @@
 {% block content %}
 <section class="content-heading">
   <div><div class="eyebrow">SOURCES</div><h1>频道管理</h1><p class="muted">自动读取当前 Telegram 账号的频道和群组，点击查看最近消息，勾选即可批量添加。</p></div>
-  <a class="button button-primary" href="/">返回下载监控</a>
+  <a class="button button-primary" href="/dashboard">返回下载监控</a>
 </section>
 
 {% if not telegram_connected %}
@@ -69,7 +69,7 @@
     </details>
   </article>
   <article class="panel">
-    <div class="panel-heading"><div><h2>已配置来源</h2><p class="muted">下载进度消息 ID 会自动保存</p></div><a class="text-link" href="/">下载监控</a></div>
+    <div class="panel-heading"><div><h2>已配置来源</h2><p class="muted">下载进度消息 ID 会自动保存</p></div><a class="text-link" href="/dashboard">下载监控</a></div>
     <div id="chat-table" class="task-list"></div>
   </article>
 </section>
