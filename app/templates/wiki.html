@@ -122,7 +122,7 @@ docker compose ps</code></pre>
         <p>如果不希望本地构建，可直接拉取 Docker Hub 镜像。数据库、密钥和会话仍必须通过卷挂载持久化。</p>
         <div class="code-block">
           <div class="code-head"><span>bash · docker hub</span><button class="copy-button" type="button" data-copy-target="image-command">复制命令</button></div>
-          <pre><code id="image-command">docker pull xxoo520zls/telegram-media-downloader-web:3.13.1
+          <pre><code id="image-command">docker pull xxoo520zls/telegram-media-downloader-web:3.14.0
 docker compose up -d</code></pre>
         </div>
         <p class="docs-muted">Compose 配置中的 <code>image</code> 字段会同步标记本地构建结果，因此源码构建和镜像部署可以共用同一份配置。</p>

@@ -24,7 +24,7 @@ docker compose ps
 ## 预构建镜像
 
 \`\`\`bash
-docker pull xxoo520zls/telegram-media-downloader-web:3.13.1
+docker pull xxoo520zls/telegram-media-downloader-web:3.14.0
 docker compose up -d
 \`\`\`
 

@@ -3,8 +3,15 @@
 
   const { useEffect, useRef, useState } = React;
   const { AnimatePresence, motion } = window.Motion || {};
-  const appVersion = document.querySelector('meta[name="app-version"]')?.content || "3.13.1";
-  const asset = (path) => path + "?v=" + encodeURIComponent(appVersion);
+  const appVersion = document.querySelector('meta[name="app-version"]')?.content || "3.14.0";
+  const staticMode = document.querySelector('meta[name="site-mode"]')?.content === "github-pages";
+  const repoUrl = "https://github.com/cvpia/telegram-media-downloader-web";
+  const workspaceHref = staticMode ? repoUrl : "/dashboard";
+  const wikiHref = staticMode ? "wiki.html" : "/wiki";
+  const asset = (path) => {
+    const resolved = staticMode && path.startsWith("/static/") ? "assets/" + path.slice(8) : path;
+    return resolved + "?v=" + encodeURIComponent(appVersion);
+  };
 
   const screenshots = [
     {
@@ -680,13 +687,13 @@
           </a>
 
           <div className="nav-links">
-            {navLinks.map((item) => <a href={item.href} key={item.href}>{item.label}</a>)}
+            {navLinks.map((item) => <a href={item.href === "/wiki" ? wikiHref : item.href} key={item.href}>{item.label}</a>)}
           </div>
 
           <div className="nav-actions">
             <span className="nav-status"><i /> SYSTEM ONLINE</span>
-            <a className="button-primary" href="/dashboard">
-              开始体验 <Icon name="arrow" />
+            <a className="button-primary" href={workspaceHref} target={staticMode ? "_blank" : undefined} rel={staticMode ? "noreferrer" : undefined}>
+              {staticMode ? "GitHub 仓库" : "开始体验"} <Icon name="arrow" />
             </a>
             <button
               className="mobile-menu-button"
@@ -710,9 +717,9 @@
               transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
             >
               {navLinks.map((item) => (
-                <a href={item.href} key={item.href} onClick={() => setOpen(false)}>{item.label}</a>
+                <a href={item.href === "/wiki" ? wikiHref : item.href} key={item.href} onClick={() => setOpen(false)}>{item.label}</a>
               ))}
-              <a href="/dashboard" onClick={() => setOpen(false)}>进入工作台 →</a>
+              <a href={workspaceHref} target={staticMode ? "_blank" : undefined} rel={staticMode ? "noreferrer" : undefined} onClick={() => setOpen(false)}>{staticMode ? "查看 GitHub →" : "进入工作台 →"}</a>
             </motion.div>
           )}
         </AnimatePresence>
@@ -762,8 +769,8 @@
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.56, ease: [0.16, 1, 0.3, 1] }}
           >
-            <a className="button-primary" href="/dashboard">
-              进入工作台 <Icon name="arrow" />
+            <a className="button-primary" href={workspaceHref} target={staticMode ? "_blank" : undefined} rel={staticMode ? "noreferrer" : undefined}>
+              {staticMode ? "查看 GitHub" : "进入工作台"} <Icon name="arrow" />
             </a>
             <a className="button-secondary" href="#interface" onClick={scrollToShowcase}>
               查看产品界面 <Icon name="external" />
@@ -909,7 +916,7 @@
               ))}
             </div>
 
-            <a className="button-secondary" href="/dashboard">查看实时网络 <Icon name="arrow" /></a>
+            <a className="button-secondary" href={workspaceHref} target={staticMode ? "_blank" : undefined} rel={staticMode ? "noreferrer" : undefined}>{staticMode ? "查看 GitHub" : "查看实时网络"} <Icon name="arrow" /></a>
           </div>
 
           <motion.div
@@ -974,9 +981,8 @@
   }
 
   function Deployment() {
-    const repoUrl = "https://github.com/cvpia/telegram-media-downloader-web";
     const composeCode = "git clone https://github.com/cvpia/telegram-media-downloader-web.git\ncd telegram-media-downloader-web\ndocker compose up -d --build";
-    const imageCode = "docker pull xxoo520zls/telegram-media-downloader-web:3.13.1\ndocker compose up -d";
+    const imageCode = "docker pull xxoo520zls/telegram-media-downloader-web:3.14.0\ndocker compose up -d";
 
     return (
       <section className="section deploy-section" id="deploy">
@@ -1019,7 +1025,7 @@
               </div>
               <div className="repo-actions">
                 <a className="button-primary" href={repoUrl} target="_blank" rel="noreferrer">打开 GitHub <Icon name="external" /></a>
-                <a className="button-secondary" href="/wiki">阅读 Wiki <Icon name="arrow" /></a>
+                <a className="button-secondary" href={wikiHref}>阅读 Wiki <Icon name="arrow" /></a>
               </div>
             </motion.article>
 
@@ -1063,8 +1069,8 @@
           >
             <span><i /> 部署完成后访问 <code>http://服务器IP:8000</code></span>
             <div>
-              <a href="/wiki#docker-compose">Docker 部署指南 <Icon name="arrow" /></a>
-              <a href="/wiki#security">安全与备份 <Icon name="arrow" /></a>
+              <a href={wikiHref + "#docker-compose"}>Docker 部署指南 <Icon name="arrow" /></a>
+              <a href={wikiHref + "#security"}>安全与备份 <Icon name="arrow" /></a>
               <a href={repoUrl + "/releases"} target="_blank" rel="noreferrer">Release Notes <Icon name="external" /></a>
             </div>
           </motion.div>
@@ -1178,7 +1184,7 @@
           >
             <div className="section-kicker">Answers</div>
             <h2>需要知道的，<br />都在这里。</h2>
-            <p>关于隐私、部署与下载机制的高频问题。如果还需要更多信息，可以查看 <a href="/wiki">完整 Wiki 文档</a>。</p>
+            <p>关于隐私、部署与下载机制的高频问题。如果还需要更多信息，可以查看 <a href={wikiHref}>完整 Wiki 文档</a>。</p>
           </motion.div>
 
           <div className="faq-list">
@@ -1238,14 +1244,24 @@
               <a href="#network">数据网络</a>
               <a href="#interface">真实界面</a>
               <a href="#deploy">部署方案</a>
-              <a href="/wiki">Wiki 文档</a>
+              <a href={wikiHref}>Wiki 文档</a>
             </div>
             <div className="footer-column">
               <h3>开始</h3>
-              <a href="/dashboard">进入工作台</a>
-              <a href="/setup">配置向导</a>
-              <a href="/wiki">部署文档</a>
-              <a href="/api/docs">API 文档</a>
+              {staticMode ? (
+                <>
+                  <a href={repoUrl} target="_blank" rel="noreferrer">查看 GitHub</a>
+                  <a href={wikiHref}>部署文档</a>
+                  <a href={repoUrl + "/releases"} target="_blank" rel="noreferrer">Release Notes</a>
+                </>
+              ) : (
+                <>
+                  <a href="/dashboard">进入工作台</a>
+                  <a href="/setup">配置向导</a>
+                  <a href="/wiki">部署文档</a>
+                  <a href="/api/docs">API 文档</a>
+                </>
+              )}
             </div>
             <div className="footer-column">
               <h3>项目</h3>
@@ -1275,10 +1291,10 @@
         >
           <div className="section-kicker">Start the signal</div>
           <h2>你的内容，<br />值得一个更好的归处。</h2>
-          <p>打开工作台，完成一次配置。之后，让内容自己流向该去的地方。</p>
+          <p>{staticMode ? "访问 GitHub 获取完整源码，使用 Docker Compose 完成一次部署。" : "打开工作台，完成一次配置。之后，让内容自己流向该去的地方。"}</p>
           <div className="hero-actions">
-            <a className="button-primary" href="/dashboard">立即开始 <Icon name="arrow" /></a>
-            <a className="button-secondary" href="/wiki">部署与 Wiki 文档 <Icon name="arrow" /></a>
+            <a className="button-primary" href={workspaceHref} target={staticMode ? "_blank" : undefined} rel={staticMode ? "noreferrer" : undefined}>{staticMode ? "查看官方仓库" : "立即开始"} <Icon name="arrow" /></a>
+            <a className="button-secondary" href={wikiHref}>部署与 Wiki 文档 <Icon name="arrow" /></a>
           </div>
         </motion.div>
       </section>

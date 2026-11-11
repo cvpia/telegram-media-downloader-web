@@ -4,7 +4,7 @@
 
 - 官方仓库：https://github.com/cvpia/telegram-media-downloader-web
 - 站内文档：\`/wiki\`
-- 当前版本：3.13.1
+- 当前版本：3.14.0
 
 ## 文档导航
 

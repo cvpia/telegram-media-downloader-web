@@ -1,4 +1,4 @@
 """Application metadata shown in the web interface."""
 
 APP_NAME = "Telegram Media Downloader"
-APP_VERSION = "3.13.1"
+APP_VERSION = "3.14.0"

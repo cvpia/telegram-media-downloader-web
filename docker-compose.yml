@@ -1,6 +1,6 @@
 services:
   telegram-media-downloader:
-    image: xxoo520zls/telegram-media-downloader-web:3.13.1
+    image: xxoo520zls/telegram-media-downloader-web:3.14.0
     build:
       context: .
       target: runtime

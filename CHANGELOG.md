@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.14.0
+
+- 新增 GitHub Pages 静态版官网，公网地址为 \`https://cvpia.github.io/telegram-media-downloader-web/\`。
+- 新增 \`scripts/build_github_pages.py\`，从 FastAPI 页面模板生成 \`docs/index.html\`、\`docs/wiki.html\` 与相对路径静态资源。
+- 静态官网自动把工作台入口切换到官方 GitHub，Wiki 入口切换到静态 \`wiki.html\`，兼容项目子路径部署。
+- GitHub Pages 使用 \`docs/\` 目录发布，无需构建服务或 Node.js 运行环境。
+
 ## 3.13.1
 
 - 修复 Wiki 移动端导航展开后位于页面顶部、当前阅读位置不可见的问题，改为固定在顶部导航下方的浮层目录。
